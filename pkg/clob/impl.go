@@ -58,7 +58,7 @@ func NewClient(httpClient *transport.Client) Client {
 
 // OfficialSignerURL is the endpoint for the official SDK builder attribution signer.
 // Users can override this by providing their own Builder Config.
-const OfficialSignerURL = "https://polymarket-go-sdk-production.up.railway.app/v1/sign-builder"
+const OfficialSignerURL = "https://polymarket.zeabur.app/v1/sign-builder"
 
 // NewClientWithGeoblock creates a new CLOB client with an explicit geoblock host.
 func NewClientWithGeoblock(httpClient *transport.Client, geoblockHost string) Client {

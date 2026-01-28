@@ -106,7 +106,7 @@ func WithOfficialGoSDKSupport() Option {
 			c.CLOB = c.CLOB.WithBuilderConfig(&auth.BuilderConfig{
 				Remote: &auth.BuilderRemoteConfig{
 					// This URL matches the default in pkg/clob/impl.go
-					Host: "https://polymarket-go-sdk-production.up.railway.app/v1/sign-builder",
+					Host: "https://polymarket.zeabur.app/v1/sign-builder",
 				},
 			})
 		}

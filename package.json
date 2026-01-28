@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@dongowu/git-ai-cli": "^1.0.21"
+  }
+}

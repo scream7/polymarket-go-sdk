@@ -1,111 +1,113 @@
-# Go Polymarket SDK (Full-Stack)
+# Polymarket Enterprise Go SDK
 
-Unified Go SDK covering Polymarket CLOB REST, CLOB WebSocket, RTDS WebSocket,
-Gamma API, Data API, Bridge API, and CTF on-chain operations.
+[![Go CI](https://github.com/GoPolymarket/polymarket-go-sdk/actions/workflows/go.yml/badge.svg)](https://github.com/GoPolymarket/polymarket-go-sdk/actions)
+[![Go Reference](https://pkg.go.dev/badge/github.com/GoPolymarket/polymarket-go-sdk.svg)](https://pkg.go.dev/github.com/GoPolymarket/polymarket-go-sdk)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Scope
+Unified, production-grade Go SDK for Polymarket covering CLOB REST, WebSocket, RTDS, Gamma API, and CTF on-chain operations. 
 
-- Unified client with shared config, transport, and auth layers.
-- Direct, zero-proxy alignment to Polymarket public endpoints.
-- Consistent request/response types across modules.
+This SDK is architecturally aligned with the official [rs-clob-client](https://github.com/Polymarket/rs-clob-client), providing Go developers with a modular and enterprise-ready trading experience.
 
-## Quickstart
+## ✨ Key Features
 
+- **Modular Architecture**: Decoupled `RFQ`, `WS` (WebSocket), and `Heartbeat` modules.
+- **Enterprise Security**: Built-in support for **AWS KMS** (Key Management Service) signing.
+- **Unified Client**: Single entry point with shared transport, auth, and config layers.
+- **Institutional Reliability**: Automated connection management and robust error handling.
+- **Comprehensive Coverage**: Support for all Polymarket APIs (CLOB, Gamma, Data, RTDS, CTF).
+
+## 🏗 Architecture
+
+```text
+pkg/
+├── auth/              # Auth & Signing (EOA, AWS KMS)
+├── clob/              # CLOB REST Core
+│   ├── clobtypes/     # Shared Domain Types
+│   ├── rfq/           # RFQ Module
+│   ├── ws/            # WebSocket Subsystem
+│   └── heartbeat/     # Liveness Management
+├── gamma/             # Gamma API
+├── data/              # Data API
+└── ctf/               # CTF On-chain Operations
+```
+
+## 🚀 Installation
+
+```bash
+go get github.com/GoPolymarket/polymarket-go-sdk
+```
+
+## 🛠 Quick Start
+
+### Initialize Client
 ```go
+import polymarket "github.com/GoPolymarket/polymarket-go-sdk"
+
 client := polymarket.NewClient(polymarket.WithUseServerTime(true))
-authClient := client.CLOB.WithAuth(signer, apiKey)
-
-// Limit order using OrderBuilder (GTC)
-signable, _ := clob.NewOrderBuilder(authClient, signer).
-  TokenID("1234567890").
-  Side("BUY").
-  Price(0.45).
-  Size(10).
-  BuildSignable()
-
-resp, _ := authClient.CreateOrderFromSignable(ctx, signable)
+authClient := client.CLOB().WithAuth(signer, apiKey)
 ```
 
-## Market Orders (FAK/FOK)
-
+### Request for Quote (RFQ)
 ```go
-signable, _ := clob.NewOrderBuilder(authClient, signer).
-  TokenID("1234567890").
-  Side("BUY").
-  AmountUSDC(100).
-  OrderType(clob.OrderTypeFAK).
-  BuildMarket()
+rfqClient := authClient.RFQ()
+resp, err := rfqClient.CreateRFQRequest(ctx, &rfq.RFQRequest{
+    AssetIn:  "USDC_ADDRESS",
+    AssetOut: "TOKEN_ADDRESS",
+    AmountIn: "100",
+})
 ```
 
-## Pagination Helpers
-
+### Real-time Orderbook
 ```go
-trades, _ := authClient.TradesAll(ctx, &clob.TradesRequest{Limit: 50})
-orders, _ := authClient.OrdersAll(ctx, &clob.OrdersRequest{Limit: 50})
+wsClient := authClient.WS()
+events, _ := wsClient.SubscribeOrderbook(ctx, []string{"TOKEN_ID"})
+
+for event := range events {
+    fmt.Printf("Price: %s\n", event.Bids[0].Price)
+}
 ```
 
-## Examples
+### AWS KMS Integration
+```go
+import "github.com/GoPolymarket/polymarket-go-sdk/pkg/auth/kms"
 
-- `examples/order_builder`: limit order builder (offline tick size override)
-- `examples/market_order`: market order builder (FAK/FOK)
-- `examples/gtd_order`: GTD + expiration
-- `examples/pagination`: next_cursor pagination helper
-- `examples/builder_flow`: end-to-end token lookup + builder API key flow
-- `examples/data_client`: Data API queries
-- `examples/ctf_client`: CTF on-chain transactions
-- `examples/rtds_client`: RTDS price stream
-- `examples/ws_user_client`: CLOB WS user channels (orders/trades)
-- `examples/ws_client`: CLOB WS market channels
-- `examples/gamma_client`: Gamma API queries
-- `examples/rfq_flow`: RFQ create/quote/accept/approve flow
+kmsSigner, _ := kms.NewAWSSigner(ctx, kmsClient, "key-id", 137)
+authClient := client.CLOB().WithAuth(kmsSigner, apiKey)
+```
 
-### builder_flow env
+## 🗺 Roadmap
 
-- `POLYMARKET_PK`
-- `POLYMARKET_API_KEY` / `POLYMARKET_API_SECRET` / `POLYMARKET_API_PASSPHRASE` (optional, will derive if missing)
-- `POLYMARKET_BUILDER_API_KEY` / `POLYMARKET_BUILDER_API_SECRET` / `POLYMARKET_BUILDER_API_PASSPHRASE` (optional)
-- `POLYMARKET_BUILDER_REMOTE_HOST` / `POLYMARKET_BUILDER_REMOTE_TOKEN` (optional, overrides local builder keys)
+- [x] Full CLOB REST Support
+- [x] Modular RFQ & WebSocket subsystems
+- [x] **AWS KMS Integration**
+- [ ] Google Cloud KMS & Azure Key Vault Support
+- [ ] Local Orderbook Snapshot Management
+- [ ] High-performance CLI Tool (`polygo`)
 
-### ws_user_client env
+## 📖 Examples & Environment Variables
 
-- `POLYMARKET_PK`
-- `POLYMARKET_API_KEY` / `POLYMARKET_API_SECRET` / `POLYMARKET_API_PASSPHRASE` (optional, will derive if missing)
-- `CLOB_WS_DEBUG` (optional, log raw WS messages)
-- `CLOB_WS_DISABLE_PING` (optional, disable PING keepalive)
-- `CLOB_WS_RECONNECT` (optional, set 0/false to disable reconnects)
-- `CLOB_WS_RECONNECT_DELAY_MS` (optional, default 2000)
-- `CLOB_WS_RECONNECT_MAX` (optional, default 5, 0 = unlimited)
+The SDK includes comprehensive examples in the `examples/` directory.
 
-### rtds_client env
+### Environment Setup for Examples
+- `POLYMARKET_PK`: Hex private key for EOA signing.
+- `POLYMARKET_API_KEY`: CLOB API Key.
+- `POLYMARKET_API_SECRET`: CLOB API Secret.
+- `POLYMARKET_API_PASSPHRASE`: CLOB API Passphrase.
+- `CLOB_WS_DEBUG`: Set to 1 to enable raw WS logging.
 
-- `RTDS_WS_RECONNECT` (optional, set 0/false to disable reconnects)
-- `RTDS_WS_RECONNECT_DELAY_MS` (optional, default 2000)
-- `RTDS_WS_RECONNECT_MAX` (optional, default 5, 0 = unlimited)
+*Refer to the [examples](./examples) folder for detailed usage of RFQ, WS, and CTF clients.*
 
-### rfq_flow env
+## 🤝 Contributing & Builder Attribution
 
-- `POLYMARKET_PK`
-- `POLYMARKET_API_KEY` / `POLYMARKET_API_SECRET` / `POLYMARKET_API_PASSPHRASE` (optional, will derive if missing)
-- `RFQ_ASSET_IN` / `RFQ_ASSET_OUT` / `RFQ_AMOUNT_IN` / `RFQ_AMOUNT_OUT` / `RFQ_USER_TYPE`
-- `RFQ_SIGN_TOKEN_ID` / `RFQ_SIGN_SIDE` / `RFQ_SIGN_PRICE` / `RFQ_SIGN_SIZE` (optional, build a signed order)
-- `RFQ_SIGN_ORDER_TYPE` / `RFQ_SIGN_POST_ONLY` (optional, signed order extras)
-- `RFQ_ACCEPT_*` / `RFQ_APPROVE_*` (optional, send accept/approve using a signed order)
+This project is aiming to become the standard Go implementation for the Polymarket ecosystem.
 
-### data_client env
+**Note:** By default, this SDK attributes trading volume to the maintainer via a secure, remote-signing Builder ID. This helps support the ongoing maintenance of the project.
+- **Institutions/Builders**: If you have your own Builder ID, you can easily override this by using `WithBuilderAttribution(...)`.
+- **Community**: If you don't have a Builder ID, no action is needed—your usage automatically supports the project!
 
-- `DATA_USER_ADDRESS` (required for user-specific queries)
+## 📜 License
 
-### ctf_client env
+MIT License - see [LICENSE](LICENSE) for details.
 
-- `CTF_RPC_URL`
-- `CTF_PRIVATE_KEY`
-- `CTF_CHAIN_ID` (optional, default 137)
-- `CTF_NEG_RISK` (optional, set 1 to use NegRisk adapter)
-- `CTF_DO_TX` (optional, set 1 to send a transaction)
-- `CTF_ACTION` (required when CTF_DO_TX=1, split|merge|redeem|redeem_neg_risk)
-- `CTF_COLLATERAL` / `CTF_CONDITION_ID`
-- `CTF_PARENT_COLLECTION_ID` (optional, default 0x0)
-- `CTF_PARTITION` (split/merge, comma-separated integers)
-- `CTF_INDEX_SETS` (redeem, comma-separated integers)
-- `CTF_AMOUNTS` (redeem_neg_risk, comma-separated integers)
-- `CTF_AMOUNT` (split/merge, integer amount in base units)
+---
+*Disclaimer: This is an unofficial community-maintained SDK. Use it at your own risk.*

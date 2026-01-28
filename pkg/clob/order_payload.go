@@ -1,18 +1,20 @@
 package clob
 
+import "github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
+
 import (
 	"fmt"
 	"strings"
 
-	"go-polymarket-sdk/pkg/types"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 )
 
-func buildOrderPayload(order *SignedOrder) (map[string]interface{}, error) {
+func buildOrderPayload(order *clobtypes.SignedOrder) (map[string]interface{}, error) {
 	if order == nil {
 		return nil, fmt.Errorf("order is required")
 	}
-	orderType := normalizeOrderType(order.OrderType, OrderTypeGTC)
-	if order.PostOnly != nil && *order.PostOnly && orderType != OrderTypeGTC && orderType != OrderTypeGTD {
+	orderType := normalizeOrderType(order.OrderType, clobtypes.OrderTypeGTC)
+	if order.PostOnly != nil && *order.PostOnly && orderType != clobtypes.OrderTypeGTC && orderType != clobtypes.OrderTypeGTD {
 		return nil, fmt.Errorf("postOnly is only supported for GTC and GTD orders")
 	}
 	orderMap, err := orderWithSignature(order)
@@ -34,7 +36,7 @@ func buildOrderPayload(order *SignedOrder) (map[string]interface{}, error) {
 	return payload, nil
 }
 
-func buildOrdersPayload(orders *SignedOrders) ([]map[string]interface{}, error) {
+func buildOrdersPayload(orders *clobtypes.SignedOrders) ([]map[string]interface{}, error) {
 	if orders == nil {
 		return nil, fmt.Errorf("orders are required")
 	}
@@ -50,7 +52,7 @@ func buildOrdersPayload(orders *SignedOrders) ([]map[string]interface{}, error) 
 	return payloads, nil
 }
 
-func orderWithSignature(order *SignedOrder) (map[string]interface{}, error) {
+func orderWithSignature(order *clobtypes.SignedOrder) (map[string]interface{}, error) {
 	if order == nil {
 		return nil, fmt.Errorf("order is required")
 	}
@@ -117,11 +119,11 @@ func saltToJSON(value types.U256) (interface{}, error) {
 	return value.Int.Uint64(), nil
 }
 
-func normalizeOrderType(orderType OrderType, fallback OrderType) OrderType {
+func normalizeOrderType(orderType clobtypes.OrderType, fallback clobtypes.OrderType) clobtypes.OrderType {
 	trimmed := strings.TrimSpace(string(orderType))
 	if trimmed == "" {
 		return fallback
 	}
 	upper := strings.ToUpper(trimmed)
-	return OrderType(upper)
+	return clobtypes.OrderType(upper)
 }

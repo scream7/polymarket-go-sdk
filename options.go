@@ -1,14 +1,15 @@
 package polymarket
 
 import (
-	"go-polymarket-sdk/pkg/bridge"
-	"go-polymarket-sdk/pkg/clob"
-	"go-polymarket-sdk/pkg/clobws"
-	"go-polymarket-sdk/pkg/ctf"
-	"go-polymarket-sdk/pkg/data"
-	"go-polymarket-sdk/pkg/gamma"
-	"go-polymarket-sdk/pkg/rtds"
-	"go-polymarket-sdk/pkg/transport"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/bridge"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/ws"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/ctf"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/data"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/gamma"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/rtds"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/transport"
 )
 
 // Option mutates the root client.
@@ -44,7 +45,7 @@ func WithCLOB(client clob.Client) Option {
 	}
 }
 
-func WithCLOBWS(client clobws.Client) Option {
+func WithCLOBWS(client ws.Client) Option {
 	return func(c *Client) {
 		c.CLOBWS = client
 	}
@@ -79,3 +80,37 @@ func WithCTF(client ctf.Client) Option {
 		c.CTF = client
 	}
 }
+
+// WithBuilderAttribution configures the client to attribute volume to a specific Builder.
+// Use this if you have your own Builder API Key from builders.polymarket.com.
+func WithBuilderAttribution(apiKey, secret, passphrase string) Option {
+	return func(c *Client) {
+		if c.CLOB != nil {
+			c.CLOB = c.CLOB.WithBuilderConfig(&auth.BuilderConfig{
+				Local: &auth.BuilderCredentials{
+					Key:        apiKey,
+					Secret:     secret,
+					Passphrase: passphrase,
+				},
+			})
+		}
+	}
+}
+
+// WithOfficialGoSDKSupport configures the client to attribute volume to the SDK maintainer.
+// This is enabled by default. Use this option to explicitly restore the official attribution
+// if it was previously overwritten.
+func WithOfficialGoSDKSupport() Option {
+	return func(c *Client) {
+		if c.CLOB != nil {
+			c.CLOB = c.CLOB.WithBuilderConfig(&auth.BuilderConfig{
+				Remote: &auth.BuilderRemoteConfig{
+					// This URL matches the default in pkg/clob/impl.go
+					Host: "https://api.your-domain.com/v1/sign-builder",
+				},
+			})
+		}
+	}
+}
+
+

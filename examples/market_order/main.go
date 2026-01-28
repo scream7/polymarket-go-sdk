@@ -1,14 +1,16 @@
 package main
 
 import (
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"context"
 	"fmt"
 	"log"
 	"os"
 
-	polymarket "go-polymarket-sdk"
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/clob"
+	polymarket "github.com/GoPolymarket/polymarket-go-sdk"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob"
+	
 )
 
 func main() {
@@ -35,7 +37,7 @@ func main() {
 		TokenID("1234567890").
 		Side("BUY").
 		AmountUSDC(100).
-		OrderType(clob.OrderTypeFAK).
+		OrderType(clobtypes.OrderTypeFAK).
 		BuildMarket()
 	if err != nil {
 		log.Fatalf("BuildMarket failed: %v", err)

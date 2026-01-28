@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"go-polymarket-sdk/pkg/transport"
-	"go-polymarket-sdk/pkg/types"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/transport"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 
 	"github.com/ethereum/go-ethereum/common"
 )

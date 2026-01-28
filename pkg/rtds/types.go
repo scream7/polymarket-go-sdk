@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/types"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 )
 
 // ConnectionState represents RTDS connection status.

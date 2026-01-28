@@ -6,7 +6,8 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"go-polymarket-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 )
 
 func mustSigner(t *testing.T) auth.Signer {
@@ -27,7 +28,7 @@ func TestBuildMarketPriceValidation(t *testing.T) {
 		TokenID("123").
 		Side("BUY").
 		AmountUSDC(10).
-		OrderType(OrderTypeFAK).
+		OrderType(clobtypes.OrderTypeFAK).
 		Price(0.123).
 		BuildMarket()
 	if err == nil || !strings.Contains(err.Error(), "decimal places") {
@@ -44,7 +45,7 @@ func TestBuildMarketAmountSharesValidation(t *testing.T) {
 		TokenID("123").
 		Side("SELL").
 		AmountShares(1.234).
-		OrderType(OrderTypeFAK).
+		OrderType(clobtypes.OrderTypeFAK).
 		BuildMarket()
 	if err == nil || !strings.Contains(err.Error(), "amount has too many decimal places") {
 		t.Fatalf("expected amount decimal validation error, got %v", err)
@@ -60,7 +61,7 @@ func TestBuildMarketAmountUSDCValidation(t *testing.T) {
 		TokenID("123").
 		Side("BUY").
 		AmountUSDC(0.0000001).
-		OrderType(OrderTypeFAK).
+		OrderType(clobtypes.OrderTypeFAK).
 		BuildMarket()
 	if err == nil || !strings.Contains(err.Error(), "amount has too many decimal places") {
 		t.Fatalf("expected amount decimal validation error, got %v", err)
@@ -71,8 +72,8 @@ func TestBuildMarketUsesOrderBookDepth(t *testing.T) {
 	stub := newStubClient()
 	stub.tickSize = "0.01"
 	stub.feeRate = 0
-	stub.book = OrderBookResponse{
-		Asks: []PriceLevel{
+	stub.book = clobtypes.OrderBookResponse{
+		Asks: []clobtypes.PriceLevel{
 			{Price: "0.6", Size: "100"},
 			{Price: "0.55", Size: "100"},
 			{Price: "0.5", Size: "100"},
@@ -83,7 +84,7 @@ func TestBuildMarketUsesOrderBookDepth(t *testing.T) {
 		TokenID("123").
 		Side("BUY").
 		AmountUSDC(50).
-		OrderType(OrderTypeFAK).
+		OrderType(clobtypes.OrderTypeFAK).
 		BuildMarket()
 	if err != nil {
 		t.Fatalf("BuildMarket failed: %v", err)
@@ -104,8 +105,8 @@ func TestBuildMarketFOKInsufficientLiquidity(t *testing.T) {
 	stub := newStubClient()
 	stub.tickSize = "0.01"
 	stub.feeRate = 0
-	stub.book = OrderBookResponse{
-		Asks: []PriceLevel{
+	stub.book = clobtypes.OrderBookResponse{
+		Asks: []clobtypes.PriceLevel{
 			{Price: "0.6", Size: "1"},
 		},
 	}
@@ -114,7 +115,7 @@ func TestBuildMarketFOKInsufficientLiquidity(t *testing.T) {
 		TokenID("123").
 		Side("BUY").
 		AmountUSDC(100).
-		OrderType(OrderTypeFOK).
+		OrderType(clobtypes.OrderTypeFOK).
 		BuildMarket()
 	if err == nil || !strings.Contains(err.Error(), "insufficient liquidity") {
 		t.Fatalf("expected insufficient liquidity error, got %v", err)
@@ -125,8 +126,8 @@ func TestBuildMarketFAKUsesTopPriceWhenInsufficient(t *testing.T) {
 	stub := newStubClient()
 	stub.tickSize = "0.01"
 	stub.feeRate = 0
-	stub.book = OrderBookResponse{
-		Asks: []PriceLevel{
+	stub.book = clobtypes.OrderBookResponse{
+		Asks: []clobtypes.PriceLevel{
 			{Price: "0.6", Size: "1"},
 			{Price: "0.55", Size: "1"},
 		},
@@ -136,7 +137,7 @@ func TestBuildMarketFAKUsesTopPriceWhenInsufficient(t *testing.T) {
 		TokenID("123").
 		Side("BUY").
 		AmountUSDC(100).
-		OrderType(OrderTypeFAK).
+		OrderType(clobtypes.OrderTypeFAK).
 		BuildMarket()
 	if err != nil {
 		t.Fatalf("BuildMarket failed: %v", err)

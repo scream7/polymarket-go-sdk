@@ -9,9 +9,9 @@ import (
 	"os"
 	"os/signal"
 
-	"go-polymarket-sdk/pkg/clobws"
-	"go-polymarket-sdk/pkg/gamma"
-	"go-polymarket-sdk/pkg/transport"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/ws"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/gamma"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/transport"
 )
 
 func main() {
@@ -78,7 +78,7 @@ func main() {
 
 	// 2. Connect WS
 	fmt.Println("Connecting to WebSocket...")
-	wsClient, err := clobws.NewClient("", nil, nil)
+	wsClient, err := ws.NewClient("", nil, nil)
 	if err != nil {
 		log.Fatalf("Failed to connect: %v", err)
 	}

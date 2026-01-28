@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"context"
 	"fmt"
 	"log"
@@ -8,9 +9,11 @@ import (
 	"strconv"
 	"strings"
 
-	polymarket "go-polymarket-sdk"
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/clob"
+	polymarket "github.com/GoPolymarket/polymarket-go-sdk"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob"
+	
+"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/rfq"
 )
 
 func main() {
@@ -48,6 +51,7 @@ func main() {
 	}
 
 	authClient := client.CLOB.WithAuth(signer, apiKey)
+	rfqClient := authClient.RFQ()
 
 	assetIn := os.Getenv("RFQ_ASSET_IN")
 	assetOut := os.Getenv("RFQ_ASSET_OUT")
@@ -62,7 +66,7 @@ func main() {
 		log.Fatal("RFQ_ASSET_IN/RFQ_ASSET_OUT/RFQ_AMOUNT_IN/RFQ_AMOUNT_OUT are required")
 	}
 
-	reqResp, err := authClient.CreateRFQRequest(ctx, &clob.RFQRequest{
+	reqResp, err := rfqClient.CreateRFQRequest(ctx, &rfq.RFQRequest{
 		AssetIn:   assetIn,
 		AssetOut:  assetOut,
 		AmountIn:  amountIn,
@@ -79,7 +83,7 @@ func main() {
 	}
 	fmt.Printf("Created RFQ request: %s (expiry=%d)\n", requestID, reqResp.Expiry)
 
-	quoteResp, err := authClient.CreateRFQQuote(ctx, &clob.RFQQuote{
+	quoteResp, err := rfqClient.CreateRFQQuote(ctx, &rfq.RFQQuote{
 		RequestIDV2: requestID,
 		AssetIn:     assetIn,
 		AssetOut:    assetOut,
@@ -97,11 +101,11 @@ func main() {
 		fmt.Printf("Created RFQ quote: %s\n", quoteID)
 	}
 
-	reqs, err := authClient.RFQRequests(ctx, &clob.RFQRequestsQuery{
+	reqs, err := rfqClient.RFQRequests(ctx, &rfq.RFQRequestsQuery{
 		Limit:   5,
-		State:   clob.RFQStateActive,
-		SortBy:  clob.RFQSortByCreated,
-		SortDir: clob.RFQSortDirDesc,
+		State:   rfq.RFQStateActive,
+		SortBy:  rfq.RFQSortByCreated,
+		SortDir: rfq.RFQSortDirDesc,
 	})
 	if err != nil {
 		log.Printf("RFQRequests failed: %v", err)
@@ -122,10 +126,10 @@ func main() {
 	} else if signed != nil {
 		if requestID := os.Getenv("RFQ_ACCEPT_REQUEST_ID"); requestID != "" {
 			if quoteID := os.Getenv("RFQ_ACCEPT_QUOTE_ID"); quoteID != "" {
-				req, err := clob.BuildRFQAcceptRequestFromSignedOrder(requestID, quoteID, signed)
+				req, err := rfq.BuildRFQAcceptRequestFromSignedOrder(requestID, quoteID, signed)
 				if err != nil {
 					log.Printf("BuildRFQAcceptRequestFromSignedOrder failed: %v", err)
-				} else if _, err := authClient.RFQRequestAccept(ctx, req); err != nil {
+				} else if _, err := rfqClient.RFQRequestAccept(ctx, req); err != nil {
 					log.Printf("RFQRequestAccept failed: %v", err)
 				} else {
 					log.Printf("RFQRequestAccept submitted (from signed order)")
@@ -134,10 +138,10 @@ func main() {
 		}
 		if requestID := os.Getenv("RFQ_APPROVE_REQUEST_ID"); requestID != "" {
 			if quoteID := os.Getenv("RFQ_APPROVE_QUOTE_ID"); quoteID != "" {
-				req, err := clob.BuildRFQApproveQuoteFromSignedOrder(requestID, quoteID, signed)
+				req, err := rfq.BuildRFQApproveQuoteFromSignedOrder(requestID, quoteID, signed)
 				if err != nil {
 					log.Printf("BuildRFQApproveQuoteFromSignedOrder failed: %v", err)
-				} else if _, err := authClient.RFQQuoteApprove(ctx, req); err != nil {
+				} else if _, err := rfqClient.RFQQuoteApprove(ctx, req); err != nil {
 					log.Printf("RFQQuoteApprove failed: %v", err)
 				} else {
 					log.Printf("RFQQuoteApprove submitted (from signed order)")
@@ -147,7 +151,7 @@ func main() {
 	}
 
 	if acceptReq := loadAcceptRequestFromEnv(); acceptReq != nil {
-		if _, err := authClient.RFQRequestAccept(ctx, acceptReq); err != nil {
+		if _, err := rfqClient.RFQRequestAccept(ctx, acceptReq); err != nil {
 			log.Printf("RFQRequestAccept failed: %v", err)
 		} else {
 			log.Printf("RFQRequestAccept submitted")
@@ -155,7 +159,7 @@ func main() {
 	}
 
 	if approveReq := loadApproveRequestFromEnv(); approveReq != nil {
-		if _, err := authClient.RFQQuoteApprove(ctx, approveReq); err != nil {
+		if _, err := rfqClient.RFQQuoteApprove(ctx, approveReq); err != nil {
 			log.Printf("RFQQuoteApprove failed: %v", err)
 		} else {
 			log.Printf("RFQQuoteApprove submitted")
@@ -163,7 +167,7 @@ func main() {
 	}
 }
 
-func buildSignedOrderFromEnv(client clob.Client, signer auth.Signer, apiKey *auth.APIKey) (*clob.SignedOrder, error) {
+func buildSignedOrderFromEnv(client clob.Client, signer auth.Signer, apiKey *auth.APIKey) (*clobtypes.SignedOrder, error) {
 	tokenID := os.Getenv("RFQ_SIGN_TOKEN_ID")
 	if tokenID == "" {
 		return nil, nil
@@ -191,7 +195,7 @@ func buildSignedOrderFromEnv(client clob.Client, signer auth.Signer, apiKey *aut
 		Size(size)
 
 	if orderType := strings.TrimSpace(os.Getenv("RFQ_SIGN_ORDER_TYPE")); orderType != "" {
-		builder.OrderType(clob.OrderType(strings.ToUpper(orderType)))
+		builder.OrderType(clobtypes.OrderType(strings.ToUpper(orderType)))
 	}
 	if postOnlyRaw := strings.TrimSpace(os.Getenv("RFQ_SIGN_POST_ONLY")); postOnlyRaw != "" {
 		postOnly := strings.EqualFold(postOnlyRaw, "true") || postOnlyRaw == "1"
@@ -220,7 +224,7 @@ func parseFloat(raw string) (float64, error) {
 	return value, nil
 }
 
-func loadAcceptRequestFromEnv() *clob.RFQAcceptRequest {
+func loadAcceptRequestFromEnv() *rfq.RFQAcceptRequest {
 	requestID := os.Getenv("RFQ_ACCEPT_REQUEST_ID")
 	quoteID := os.Getenv("RFQ_ACCEPT_QUOTE_ID")
 	makerAmount := os.Getenv("RFQ_ACCEPT_MAKER_AMOUNT")
@@ -241,7 +245,7 @@ func loadAcceptRequestFromEnv() *clob.RFQAcceptRequest {
 		return nil
 	}
 
-	return &clob.RFQAcceptRequest{
+	return &rfq.RFQAcceptRequest{
 		RequestID:   requestID,
 		QuoteIDV2:   quoteID,
 		MakerAmount: makerAmount,
@@ -260,7 +264,7 @@ func loadAcceptRequestFromEnv() *clob.RFQAcceptRequest {
 	}
 }
 
-func loadApproveRequestFromEnv() *clob.RFQApproveQuote {
+func loadApproveRequestFromEnv() *rfq.RFQApproveQuote {
 	requestID := os.Getenv("RFQ_APPROVE_REQUEST_ID")
 	quoteID := os.Getenv("RFQ_APPROVE_QUOTE_ID")
 	makerAmount := os.Getenv("RFQ_APPROVE_MAKER_AMOUNT")
@@ -281,7 +285,7 @@ func loadApproveRequestFromEnv() *clob.RFQApproveQuote {
 		return nil
 	}
 
-	return &clob.RFQApproveQuote{
+	return &rfq.RFQApproveQuote{
 		RequestID:   requestID,
 		QuoteIDV2:   quoteID,
 		MakerAmount: makerAmount,

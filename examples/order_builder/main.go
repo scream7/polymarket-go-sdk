@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"log"
 
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/clob"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob"
+	
 )
 
 func main() {

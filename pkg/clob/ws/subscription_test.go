@@ -1,4 +1,4 @@
-package clobws
+package ws
 
 import (
 	"encoding/json"

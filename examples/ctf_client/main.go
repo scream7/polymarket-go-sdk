@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"go-polymarket-sdk/pkg/ctf"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/ctf"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"

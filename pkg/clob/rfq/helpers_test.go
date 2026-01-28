@@ -1,13 +1,14 @@
-package clob
+package rfq
 
 import (
 	"math/big"
 	"testing"
 
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
-
-	"go-polymarket-sdk/pkg/types"
 )
 
 func TestRFQRequestItemToDetail(t *testing.T) {
@@ -66,8 +67,8 @@ func TestRFQQuoteItemToDetail(t *testing.T) {
 }
 
 func TestBuildRFQAcceptRequestFromSignedOrder(t *testing.T) {
-	signed := SignedOrder{
-		Order: Order{
+	signed := clobtypes.SignedOrder{
+		Order: clobtypes.Order{
 			Salt:        types.U256{Int: big.NewInt(1)},
 			Maker:       common.HexToAddress("0x0000000000000000000000000000000000000001"),
 			Signer:      common.HexToAddress("0x0000000000000000000000000000000000000002"),

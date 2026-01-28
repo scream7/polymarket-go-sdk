@@ -1,6 +1,7 @@
 package clob
 
 import (
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"math/big"
 	"strings"
 	"testing"
@@ -8,13 +9,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 
-	"go-polymarket-sdk/pkg/types"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 )
 
 func TestBuildOrderPayloadCasingAndOptions(t *testing.T) {
 	sigType := 0
-	order := SignedOrder{
-		Order: Order{
+	order := clobtypes.SignedOrder{
+		Order: clobtypes.Order{
 			Salt:          types.U256{Int: big.NewInt(1)},
 			Maker:         common.HexToAddress("0x0000000000000000000000000000000000000001"),
 			Signer:        common.HexToAddress("0x0000000000000000000000000000000000000002"),
@@ -30,7 +31,7 @@ func TestBuildOrderPayloadCasingAndOptions(t *testing.T) {
 		},
 		Signature: "0xsig",
 		Owner:     "builder-owner",
-		OrderType: OrderTypeGTC,
+		OrderType: clobtypes.OrderTypeGTC,
 		PostOnly:  boolPtr(true),
 	}
 
@@ -42,7 +43,7 @@ func TestBuildOrderPayloadCasingAndOptions(t *testing.T) {
 	if payload["owner"] != "builder-owner" {
 		t.Fatalf("owner mismatch: got %v", payload["owner"])
 	}
-	if got := payload["orderType"]; got != OrderTypeGTC {
+	if got := payload["orderType"]; got != clobtypes.OrderTypeGTC {
 		t.Fatalf("orderType mismatch: got %v", got)
 	}
 
@@ -63,8 +64,8 @@ func TestBuildOrderPayloadCasingAndOptions(t *testing.T) {
 
 func TestBuildOrderPayloadPostOnlyValidation(t *testing.T) {
 	sigType := 0
-	order := SignedOrder{
-		Order: Order{
+	order := clobtypes.SignedOrder{
+		Order: clobtypes.Order{
 			Salt:          types.U256{Int: big.NewInt(1)},
 			Maker:         common.HexToAddress("0x0000000000000000000000000000000000000001"),
 			Signer:        common.HexToAddress("0x0000000000000000000000000000000000000002"),
@@ -80,7 +81,7 @@ func TestBuildOrderPayloadPostOnlyValidation(t *testing.T) {
 		},
 		Signature: "0xsig",
 		Owner:     "builder-owner",
-		OrderType: OrderTypeFAK,
+		OrderType: clobtypes.OrderTypeFAK,
 		PostOnly:  boolPtr(true),
 	}
 
@@ -91,8 +92,8 @@ func TestBuildOrderPayloadPostOnlyValidation(t *testing.T) {
 }
 
 func TestBuildOrderPayloadRequiresSignatureAndOwner(t *testing.T) {
-	order := SignedOrder{
-		Order: Order{
+	order := clobtypes.SignedOrder{
+		Order: clobtypes.Order{
 			Salt:        types.U256{Int: big.NewInt(1)},
 			Maker:       common.HexToAddress("0x0000000000000000000000000000000000000001"),
 			Signer:      common.HexToAddress("0x0000000000000000000000000000000000000002"),

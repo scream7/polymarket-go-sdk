@@ -7,10 +7,10 @@ import (
 	"os"
 	"os/signal"
 
-	polymarket "go-polymarket-sdk"
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/clobws"
-	"go-polymarket-sdk/pkg/gamma"
+	polymarket "github.com/GoPolymarket/polymarket-go-sdk"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/ws"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/gamma"
 )
 
 func main() {
@@ -53,7 +53,7 @@ func main() {
 	}
 	log.Printf("Using market %s (%s)", marketID, question)
 
-	wsClient, err := clobws.NewClient("", signer, apiKey)
+	wsClient, err := ws.NewClient("", signer, apiKey)
 	if err != nil {
 		log.Fatalf("Failed to connect: %v", err)
 	}

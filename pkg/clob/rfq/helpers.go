@@ -1,8 +1,10 @@
-package clob
+package rfq
 
 import (
 	"fmt"
 	"math/big"
+
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
@@ -39,7 +41,7 @@ type RFQQuoteDetail struct {
 }
 
 // BuildRFQAcceptRequestFromSignedOrder builds an RFQ accept payload from a signed order.
-func BuildRFQAcceptRequestFromSignedOrder(requestID, quoteID string, signed *SignedOrder) (*RFQAcceptRequest, error) {
+func BuildRFQAcceptRequestFromSignedOrder(requestID, quoteID string, signed *clobtypes.SignedOrder) (*RFQAcceptRequest, error) {
 	if requestID == "" || quoteID == "" {
 		return nil, fmt.Errorf("requestID and quoteID are required")
 	}
@@ -85,7 +87,7 @@ func BuildRFQAcceptRequestFromSignedOrder(requestID, quoteID string, signed *Sig
 }
 
 // BuildRFQApproveQuoteFromSignedOrder builds an RFQ approve payload from a signed order.
-func BuildRFQApproveQuoteFromSignedOrder(requestID, quoteID string, signed *SignedOrder) (*RFQApproveQuote, error) {
+func BuildRFQApproveQuoteFromSignedOrder(requestID, quoteID string, signed *clobtypes.SignedOrder) (*RFQApproveQuote, error) {
 	if requestID == "" || quoteID == "" {
 		return nil, fmt.Errorf("requestID and quoteID are required")
 	}

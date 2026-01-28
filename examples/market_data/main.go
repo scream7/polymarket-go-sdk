@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"log"
 
-	"go-polymarket-sdk/pkg/clob"
-	"go-polymarket-sdk/pkg/transport"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob"
+	
+"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/heartbeat"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/rfq"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/transport"
 )
 
 func main() {
@@ -27,7 +30,8 @@ func main() {
 
 	// 3. Fetch RFQ Config (Public endpoint usually)
 	fmt.Println("\nFetching RFQ Config...")
-	rfqConfig, err := client.RFQConfig(context.Background())
+	rfqClient := rfq.NewClient(transport.NewClient(nil, "https://clob.polymarket.com"))
+	rfqConfig, err := rfqClient.RFQConfig(context.Background())
 	if err != nil {
 		log.Printf("Failed to fetch RFQ config: %v", err)
 	} else {
@@ -36,9 +40,10 @@ func main() {
 
 	// 4. Check Heartbeat
 	fmt.Println("\nChecking System Heartbeat...")
-	heartbeat, err := client.Heartbeat(context.Background(), nil)
+	heartbeatClient := heartbeat.NewClient(transport.NewClient(nil, "https://clob.polymarket.com"))
+	heartbeatResp, err := heartbeatClient.Heartbeat(context.Background(), nil)
 	if err != nil {
 		log.Fatalf("Failed to check heartbeat: %v", err)
 	}
-	fmt.Printf("System Status: %v\n", heartbeat)
+	fmt.Printf("System Status: %v\n", heartbeatResp)
 }

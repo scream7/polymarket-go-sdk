@@ -9,9 +9,13 @@ import (
 	"strings"
 	"sync"
 
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/transport"
-	"go-polymarket-sdk/pkg/types"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/heartbeat"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/rfq"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/ws"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/transport"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -27,6 +31,9 @@ type clientImpl struct {
 	cache          *clientCache
 	geoblockHost   string
 	geoblockClient *transport.Client
+	rfq            rfq.Client
+	ws             ws.Client
+	heartbeat      heartbeat.Client
 }
 
 type clientCache struct {
@@ -49,21 +56,55 @@ func NewClient(httpClient *transport.Client) Client {
 	return NewClientWithGeoblock(httpClient, "")
 }
 
+// OfficialSignerURL is the endpoint for the official SDK builder attribution signer.
+// Users can override this by providing their own Builder Config.
+const OfficialSignerURL = "https://api.your-domain.com/v1/sign-builder"
+
 // NewClientWithGeoblock creates a new CLOB client with an explicit geoblock host.
 func NewClientWithGeoblock(httpClient *transport.Client, geoblockHost string) Client {
 	if geoblockHost == "" {
 		geoblockHost = DefaultGeoblockHost
 	}
+
+	// Default Builder Config (Attribution to SDK Maintainer)
+	// This acts as a fallback. If the user provides their own config via WithBuilderConfig,
+	// this will be overwritten in the returned client or subsequent calls.
+	defaultBuilderCfg := &auth.BuilderConfig{
+		Remote: &auth.BuilderRemoteConfig{
+			Host: OfficialSignerURL,
+		},
+	}
+	
+	// Apply to transport immediately
+	if httpClient != nil {
+		httpClient.SetBuilderConfig(defaultBuilderCfg)
+	}
+
 	c := &clientImpl{
 		httpClient:     httpClient,
 		cache:          newClientCache(),
 		geoblockHost:   geoblockHost,
 		geoblockClient: nil,
+		builderCfg:     defaultBuilderCfg, // Set default
+		rfq:            rfq.NewClient(httpClient),
+		heartbeat:      heartbeat.NewClient(httpClient),
 	}
 	if httpClient != nil {
 		c.geoblockClient = httpClient.CloneWithBaseURL(geoblockHost)
 	}
 	return c
+}
+
+func (c *clientImpl) RFQ() rfq.Client {
+	return c.rfq
+}
+
+func (c *clientImpl) WS() ws.Client {
+	return c.ws
+}
+
+func (c *clientImpl) Heartbeat() heartbeat.Client {
+	return c.heartbeat
 }
 
 // WithAuth returns a new client with authentication capabilities.
@@ -79,9 +120,11 @@ func (c *clientImpl) WithAuth(signer auth.Signer, apiKey *auth.APIKey) Client {
 		cache:          c.cache,
 		geoblockHost:   c.geoblockHost,
 		geoblockClient: c.geoblockClient,
+		rfq:            c.rfq,
+		ws:             c.ws,
+		heartbeat:      c.heartbeat,
 	}
 }
-
 // WithBuilderConfig returns a new client configured with builder authentication.
 func (c *clientImpl) WithBuilderConfig(config *auth.BuilderConfig) Client {
 	c.httpClient.SetBuilderConfig(config)
@@ -94,6 +137,9 @@ func (c *clientImpl) WithBuilderConfig(config *auth.BuilderConfig) Client {
 		cache:          c.cache,
 		geoblockHost:   c.geoblockHost,
 		geoblockClient: c.geoblockClient,
+		rfq:            c.rfq,
+		ws:             c.ws,
+	heartbeat:      c.heartbeat,
 	}
 }
 
@@ -108,6 +154,9 @@ func (c *clientImpl) WithUseServerTime(use bool) Client {
 		cache:          c.cache,
 		geoblockHost:   c.geoblockHost,
 		geoblockClient: c.geoblockClient,
+		rfq:            c.rfq,
+		ws:             c.ws,
+	heartbeat:      c.heartbeat,
 	}
 }
 
@@ -128,6 +177,25 @@ func (c *clientImpl) WithGeoblockHost(host string) Client {
 		cache:          c.cache,
 		geoblockHost:   host,
 		geoblockClient: geoblockClient,
+		rfq:            c.rfq,
+		ws:             c.ws,
+	heartbeat:      c.heartbeat,
+	}
+}
+
+// WithWS sets the WebSocket client and returns a new client.
+func (c *clientImpl) WithWS(ws ws.Client) Client {
+	return &clientImpl{
+		httpClient:     c.httpClient,
+		signer:         c.signer,
+		apiKey:         c.apiKey,
+		builderCfg:     c.builderCfg,
+		cache:          c.cache,
+		geoblockHost:   c.geoblockHost,
+		geoblockClient: c.geoblockClient,
+		rfq:            c.rfq,
+		ws:             ws,
+	heartbeat:      c.heartbeat,
 	}
 }
 
@@ -142,16 +210,16 @@ func (c *clientImpl) Health(ctx context.Context) (string, error) {
 	return "UP", nil
 }
 
-func (c *clientImpl) Time(ctx context.Context) (TimeResponse, error) {
+func (c *clientImpl) Time(ctx context.Context) (clobtypes.TimeResponse, error) {
 	var ts int64
 	err := c.httpClient.Get(ctx, "/time", nil, &ts)
 	if err != nil {
-		return TimeResponse{}, err
+		return clobtypes.TimeResponse{}, err
 	}
-	return TimeResponse{Timestamp: ts}, nil
+	return clobtypes.TimeResponse{Timestamp: ts}, nil
 }
 
-func (c *clientImpl) Geoblock(ctx context.Context) (GeoblockResponse, error) {
+func (c *clientImpl) Geoblock(ctx context.Context) (clobtypes.GeoblockResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -163,12 +231,12 @@ func (c *clientImpl) Geoblock(ctx context.Context) (GeoblockResponse, error) {
 		}
 		geo = transport.NewClient(nil, host)
 	}
-	var resp GeoblockResponse
+	var resp clobtypes.GeoblockResponse
 	err := geo.Get(ctx, "/api/geoblock", nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Markets(ctx context.Context, req *MarketsRequest) (MarketsResponse, error) {
+func (c *clientImpl) Markets(ctx context.Context, req *clobtypes.MarketsRequest) (clobtypes.MarketsResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		if req.Limit > 0 {
@@ -185,38 +253,38 @@ func (c *clientImpl) Markets(ctx context.Context, req *MarketsRequest) (MarketsR
 		}
 	}
 
-	var resp MarketsResponse
+	var resp clobtypes.MarketsResponse
 	err := c.httpClient.Get(ctx, "/markets", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Market(ctx context.Context, id string) (MarketResponse, error) {
-	var resp MarketResponse
+func (c *clientImpl) Market(ctx context.Context, id string) (clobtypes.MarketResponse, error) {
+	var resp clobtypes.MarketResponse
 	err := c.httpClient.Get(ctx, fmt.Sprintf("/markets/%s", id), nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) SimplifiedMarkets(ctx context.Context, req *MarketsRequest) (MarketsResponse, error) {
+func (c *clientImpl) SimplifiedMarkets(ctx context.Context, req *clobtypes.MarketsRequest) (clobtypes.MarketsResponse, error) {
 	q := url.Values{}
 	// similar param handling...
-	var resp MarketsResponse
+	var resp clobtypes.MarketsResponse
 	err := c.httpClient.Get(ctx, "/simplified-markets", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) SamplingMarkets(ctx context.Context, req *MarketsRequest) (MarketsResponse, error) {
-	var resp MarketsResponse
+func (c *clientImpl) SamplingMarkets(ctx context.Context, req *clobtypes.MarketsRequest) (clobtypes.MarketsResponse, error) {
+	var resp clobtypes.MarketsResponse
 	err := c.httpClient.Get(ctx, "/sampling-markets", nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) SamplingSimplifiedMarkets(ctx context.Context, req *MarketsRequest) (MarketsResponse, error) {
-	var resp MarketsResponse
+func (c *clientImpl) SamplingSimplifiedMarkets(ctx context.Context, req *clobtypes.MarketsRequest) (clobtypes.MarketsResponse, error) {
+	var resp clobtypes.MarketsResponse
 	err := c.httpClient.Get(ctx, "/sampling-simplified-markets", nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) OrderBook(ctx context.Context, req *BookRequest) (OrderBookResponse, error) {
+func (c *clientImpl) OrderBook(ctx context.Context, req *clobtypes.BookRequest) (clobtypes.OrderBookResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		q.Set("token_id", req.TokenID)
@@ -224,13 +292,13 @@ func (c *clientImpl) OrderBook(ctx context.Context, req *BookRequest) (OrderBook
 			q.Set("side", req.Side)
 		}
 	}
-	var resp OrderBookResponse
+	var resp clobtypes.OrderBookResponse
 	err := c.httpClient.Get(ctx, "/book", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) OrderBooks(ctx context.Context, req *BooksRequest) (OrderBooksResponse, error) {
-	var resp OrderBooksResponse
+func (c *clientImpl) OrderBooks(ctx context.Context, req *clobtypes.BooksRequest) (clobtypes.OrderBooksResponse, error) {
+	var resp clobtypes.OrderBooksResponse
 	var body []map[string]string
 	if req != nil {
 		body = make([]map[string]string, 0, len(req.TokenIDs))
@@ -242,18 +310,18 @@ func (c *clientImpl) OrderBooks(ctx context.Context, req *BooksRequest) (OrderBo
 	return resp, err
 }
 
-func (c *clientImpl) Midpoint(ctx context.Context, req *MidpointRequest) (MidpointResponse, error) {
+func (c *clientImpl) Midpoint(ctx context.Context, req *clobtypes.MidpointRequest) (clobtypes.MidpointResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		q.Set("token_id", req.TokenID)
 	}
-	var resp MidpointResponse
+	var resp clobtypes.MidpointResponse
 	err := c.httpClient.Get(ctx, "/midpoint", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Midpoints(ctx context.Context, req *MidpointsRequest) (MidpointsResponse, error) {
-	var resp MidpointsResponse
+func (c *clientImpl) Midpoints(ctx context.Context, req *clobtypes.MidpointsRequest) (clobtypes.MidpointsResponse, error) {
+	var resp clobtypes.MidpointsResponse
 	var body []map[string]string
 	if req != nil {
 		body = make([]map[string]string, 0, len(req.TokenIDs))
@@ -265,7 +333,7 @@ func (c *clientImpl) Midpoints(ctx context.Context, req *MidpointsRequest) (Midp
 	return resp, err
 }
 
-func (c *clientImpl) Price(ctx context.Context, req *PriceRequest) (PriceResponse, error) {
+func (c *clientImpl) Price(ctx context.Context, req *clobtypes.PriceRequest) (clobtypes.PriceResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		q.Set("token_id", req.TokenID)
@@ -273,13 +341,13 @@ func (c *clientImpl) Price(ctx context.Context, req *PriceRequest) (PriceRespons
 			q.Set("side", req.Side)
 		}
 	}
-	var resp PriceResponse
+	var resp clobtypes.PriceResponse
 	err := c.httpClient.Get(ctx, "/price", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Prices(ctx context.Context, req *PricesRequest) (PricesResponse, error) {
-	var resp PricesResponse
+func (c *clientImpl) Prices(ctx context.Context, req *clobtypes.PricesRequest) (clobtypes.PricesResponse, error) {
+	var resp clobtypes.PricesResponse
 	var body []map[string]string
 	if req != nil {
 		body = make([]map[string]string, 0, len(req.TokenIDs))
@@ -295,24 +363,24 @@ func (c *clientImpl) Prices(ctx context.Context, req *PricesRequest) (PricesResp
 	return resp, err
 }
 
-func (c *clientImpl) AllPrices(ctx context.Context) (PricesResponse, error) {
-	var resp PricesResponse
+func (c *clientImpl) AllPrices(ctx context.Context) (clobtypes.PricesResponse, error) {
+	var resp clobtypes.PricesResponse
 	err := c.httpClient.Get(ctx, "/prices", nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Spread(ctx context.Context, req *SpreadRequest) (SpreadResponse, error) {
+func (c *clientImpl) Spread(ctx context.Context, req *clobtypes.SpreadRequest) (clobtypes.SpreadResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		q.Set("token_id", req.TokenID)
 	}
-	var resp SpreadResponse
+	var resp clobtypes.SpreadResponse
 	err := c.httpClient.Get(ctx, "/spread", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Spreads(ctx context.Context, req *SpreadsRequest) (SpreadsResponse, error) {
-	var resp SpreadsResponse
+func (c *clientImpl) Spreads(ctx context.Context, req *clobtypes.SpreadsRequest) (clobtypes.SpreadsResponse, error) {
+	var resp clobtypes.SpreadsResponse
 	var body []map[string]string
 	if req != nil {
 		body = make([]map[string]string, 0, len(req.TokenIDs))
@@ -324,18 +392,18 @@ func (c *clientImpl) Spreads(ctx context.Context, req *SpreadsRequest) (SpreadsR
 	return resp, err
 }
 
-func (c *clientImpl) LastTradePrice(ctx context.Context, req *LastTradePriceRequest) (LastTradePriceResponse, error) {
+func (c *clientImpl) LastTradePrice(ctx context.Context, req *clobtypes.LastTradePriceRequest) (clobtypes.LastTradePriceResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		q.Set("token_id", req.TokenID)
 	}
-	var resp LastTradePriceResponse
+	var resp clobtypes.LastTradePriceResponse
 	err := c.httpClient.Get(ctx, "/last-trade-price", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) LastTradesPrices(ctx context.Context, req *LastTradesPricesRequest) (LastTradesPricesResponse, error) {
-	var resp LastTradesPricesResponse
+func (c *clientImpl) LastTradesPrices(ctx context.Context, req *clobtypes.LastTradesPricesRequest) (clobtypes.LastTradesPricesResponse, error) {
+	var resp clobtypes.LastTradesPricesResponse
 	var body []map[string]string
 	if req != nil {
 		body = make([]map[string]string, 0, len(req.TokenIDs))
@@ -347,7 +415,7 @@ func (c *clientImpl) LastTradesPrices(ctx context.Context, req *LastTradesPrices
 	return resp, err
 }
 
-func (c *clientImpl) TickSize(ctx context.Context, req *TickSizeRequest) (TickSizeResponse, error) {
+func (c *clientImpl) TickSize(ctx context.Context, req *clobtypes.TickSizeRequest) (clobtypes.TickSizeResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		q.Set("token_id", req.TokenID)
@@ -356,11 +424,11 @@ func (c *clientImpl) TickSize(ctx context.Context, req *TickSizeRequest) (TickSi
 		c.cache.mu.RLock()
 		if cached, ok := c.cache.tickSizes[req.TokenID]; ok && cached != "" {
 			c.cache.mu.RUnlock()
-			return TickSizeResponse{MinimumTickSize: cached}, nil
+			return clobtypes.TickSizeResponse{MinimumTickSize: cached}, nil
 		}
 		c.cache.mu.RUnlock()
 	}
-	var resp TickSizeResponse
+	var resp clobtypes.TickSizeResponse
 	err := c.httpClient.Get(ctx, "/tick-size", q, &resp)
 	if err == nil && req != nil && req.TokenID != "" && c.cache != nil {
 		tickSize := resp.MinimumTickSize
@@ -376,7 +444,7 @@ func (c *clientImpl) TickSize(ctx context.Context, req *TickSizeRequest) (TickSi
 	return resp, err
 }
 
-func (c *clientImpl) NegRisk(ctx context.Context, req *NegRiskRequest) (NegRiskResponse, error) {
+func (c *clientImpl) NegRisk(ctx context.Context, req *clobtypes.NegRiskRequest) (clobtypes.NegRiskResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		q.Set("token_id", req.TokenID)
@@ -385,11 +453,11 @@ func (c *clientImpl) NegRisk(ctx context.Context, req *NegRiskRequest) (NegRiskR
 		c.cache.mu.RLock()
 		if cached, ok := c.cache.negRisk[req.TokenID]; ok {
 			c.cache.mu.RUnlock()
-			return NegRiskResponse{NegRisk: cached}, nil
+			return clobtypes.NegRiskResponse{NegRisk: cached}, nil
 		}
 		c.cache.mu.RUnlock()
 	}
-	var resp NegRiskResponse
+	var resp clobtypes.NegRiskResponse
 	err := c.httpClient.Get(ctx, "/neg-risk", q, &resp)
 	if err == nil && req != nil && req.TokenID != "" && c.cache != nil {
 		c.cache.mu.Lock()
@@ -399,7 +467,7 @@ func (c *clientImpl) NegRisk(ctx context.Context, req *NegRiskRequest) (NegRiskR
 	return resp, err
 }
 
-func (c *clientImpl) FeeRate(ctx context.Context, req *FeeRateRequest) (FeeRateResponse, error) {
+func (c *clientImpl) FeeRate(ctx context.Context, req *clobtypes.FeeRateRequest) (clobtypes.FeeRateResponse, error) {
 	q := url.Values{}
 	if req != nil && req.TokenID != "" {
 		q.Set("token_id", req.TokenID)
@@ -408,11 +476,11 @@ func (c *clientImpl) FeeRate(ctx context.Context, req *FeeRateRequest) (FeeRateR
 		c.cache.mu.RLock()
 		if cached, ok := c.cache.feeRates[req.TokenID]; ok {
 			c.cache.mu.RUnlock()
-			return FeeRateResponse{BaseFee: int(cached)}, nil
+			return clobtypes.FeeRateResponse{BaseFee: int(cached)}, nil
 		}
 		c.cache.mu.RUnlock()
 	}
-	var resp FeeRateResponse
+	var resp clobtypes.FeeRateResponse
 	err := c.httpClient.Get(ctx, "/fee-rate", q, &resp)
 	if err == nil && req != nil && req.TokenID != "" && c.cache != nil {
 		fee := int64(resp.BaseFee)
@@ -468,7 +536,7 @@ func (c *clientImpl) SetFeeRateBps(tokenID string, feeRateBps int64) {
 	c.cache.mu.Unlock()
 }
 
-func (c *clientImpl) PricesHistory(ctx context.Context, req *PricesHistoryRequest) (PricesHistoryResponse, error) {
+func (c *clientImpl) PricesHistory(ctx context.Context, req *clobtypes.PricesHistoryRequest) (clobtypes.PricesHistoryResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		q.Set("token_id", req.TokenID)
@@ -482,21 +550,21 @@ func (c *clientImpl) PricesHistory(ctx context.Context, req *PricesHistoryReques
 			q.Set("resolution", req.Resolution)
 		}
 	}
-	var resp PricesHistoryResponse
+	var resp clobtypes.PricesHistoryResponse
 	err := c.httpClient.Get(ctx, "/prices-history", q, &resp)
 	return resp, err
 }
 
 // CreateOrder builds and signs an order, then posts it to the CLOB.
 // This is a higher-level helper that combines signing and posting.
-func (c *clientImpl) CreateOrder(ctx context.Context, order *Order) (OrderResponse, error) {
+func (c *clientImpl) CreateOrder(ctx context.Context, order *clobtypes.Order) (clobtypes.OrderResponse, error) {
 	return c.CreateOrderWithOptions(ctx, order, nil)
 }
 
-func (c *clientImpl) CreateOrderWithOptions(ctx context.Context, order *Order, opts *OrderOptions) (OrderResponse, error) {
+func (c *clientImpl) CreateOrderWithOptions(ctx context.Context, order *clobtypes.Order, opts *clobtypes.OrderOptions) (clobtypes.OrderResponse, error) {
 	signed, err := c.signOrder(order)
 	if err != nil {
-		return OrderResponse{}, err
+		return clobtypes.OrderResponse{}, err
 	}
 	if opts != nil {
 		signed.OrderType = opts.OrderType
@@ -506,27 +574,27 @@ func (c *clientImpl) CreateOrderWithOptions(ctx context.Context, order *Order, o
 	return c.PostOrder(ctx, signed)
 }
 
-func (c *clientImpl) CreateOrderFromSignable(ctx context.Context, order *SignableOrder) (OrderResponse, error) {
+func (c *clientImpl) CreateOrderFromSignable(ctx context.Context, order *clobtypes.SignableOrder) (clobtypes.OrderResponse, error) {
 	if order == nil || order.Order == nil {
-		return OrderResponse{}, fmt.Errorf("order is required")
+		return clobtypes.OrderResponse{}, fmt.Errorf("order is required")
 	}
-	opts := &OrderOptions{
+	opts := &clobtypes.OrderOptions{
 		OrderType: order.OrderType,
 		PostOnly:  order.PostOnly,
 	}
 	return c.CreateOrderWithOptions(ctx, order.Order, opts)
 }
 
-func (c *clientImpl) signOrder(order *Order) (*SignedOrder, error) {
+func (c *clientImpl) signOrder(order *clobtypes.Order) (*clobtypes.SignedOrder, error) {
 	return signOrderWithCreds(c.signer, c.apiKey, order)
 }
 
 // SignOrder builds an EIP-712 signature for the given order without posting it.
-func SignOrder(signer auth.Signer, apiKey *auth.APIKey, order *Order) (*SignedOrder, error) {
+func SignOrder(signer auth.Signer, apiKey *auth.APIKey, order *clobtypes.Order) (*clobtypes.SignedOrder, error) {
 	return signOrderWithCreds(signer, apiKey, order)
 }
 
-func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *Order) (*SignedOrder, error) {
+func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *clobtypes.Order) (*clobtypes.SignedOrder, error) {
 	if signer == nil {
 		return nil, auth.ErrMissingSigner
 	}
@@ -551,7 +619,7 @@ func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *Order) (
 			{Name: "chainId", Type: "uint256"},
 			{Name: "verifyingContract", Type: "address"},
 		},
-		"Order": {
+		"clobtypes.Order": {
 			{Name: "salt", Type: "uint256"},
 			{Name: "maker", Type: "address"},
 			{Name: "signer", Type: "address"},
@@ -605,7 +673,7 @@ func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *Order) (
 		"signatureType": (*math.HexOrDecimal256)(big.NewInt(int64(sigType))),
 	}
 
-	sig, err := signer.SignTypedData(domain, typesDef, message, "Order")
+	sig, err := signer.SignTypedData(domain, typesDef, message, "clobtypes.Order")
 	if err != nil {
 		return nil, fmt.Errorf("signing failed: %w", err)
 	}
@@ -615,15 +683,15 @@ func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *Order) (
 		owner = signer.Address().String()
 	}
 
-	return &SignedOrder{
+	return &clobtypes.SignedOrder{
 		Order:     *order,
 		Signature: hexutil.Encode(sig),
 		Owner:     owner,
 	}, nil
 }
 
-func (c *clientImpl) PostOrder(ctx context.Context, req *SignedOrder) (OrderResponse, error) {
-	var resp OrderResponse
+func (c *clientImpl) PostOrder(ctx context.Context, req *clobtypes.SignedOrder) (clobtypes.OrderResponse, error) {
+	var resp clobtypes.OrderResponse
 	payload, err := buildOrderPayload(req)
 	if err != nil {
 		return resp, err
@@ -632,8 +700,8 @@ func (c *clientImpl) PostOrder(ctx context.Context, req *SignedOrder) (OrderResp
 	return resp, err
 }
 
-func (c *clientImpl) PostOrders(ctx context.Context, req *SignedOrders) (PostOrdersResponse, error) {
-	var resp PostOrdersResponse
+func (c *clientImpl) PostOrders(ctx context.Context, req *clobtypes.SignedOrders) (clobtypes.PostOrdersResponse, error) {
+	var resp clobtypes.PostOrdersResponse
 	payload, err := buildOrdersPayload(req)
 	if err != nil {
 		return resp, err
@@ -642,37 +710,37 @@ func (c *clientImpl) PostOrders(ctx context.Context, req *SignedOrders) (PostOrd
 	return resp, err
 }
 
-func (c *clientImpl) CancelOrder(ctx context.Context, req *CancelOrderRequest) (CancelResponse, error) {
-	var resp CancelResponse
+func (c *clientImpl) CancelOrder(ctx context.Context, req *clobtypes.CancelOrderRequest) (clobtypes.CancelResponse, error) {
+	var resp clobtypes.CancelResponse
 	err := c.httpClient.Delete(ctx, "/order", req, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) CancelOrders(ctx context.Context, req *CancelOrdersRequest) (CancelResponse, error) {
-	var resp CancelResponse
+func (c *clientImpl) CancelOrders(ctx context.Context, req *clobtypes.CancelOrdersRequest) (clobtypes.CancelResponse, error) {
+	var resp clobtypes.CancelResponse
 	err := c.httpClient.Delete(ctx, "/orders", req, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) CancelAll(ctx context.Context) (CancelAllResponse, error) {
-	var resp CancelAllResponse
+func (c *clientImpl) CancelAll(ctx context.Context) (clobtypes.CancelAllResponse, error) {
+	var resp clobtypes.CancelAllResponse
 	err := c.httpClient.Delete(ctx, "/cancel-all", nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) CancelMarketOrders(ctx context.Context, req *CancelMarketOrdersRequest) (CancelMarketOrdersResponse, error) {
-	var resp CancelMarketOrdersResponse
+func (c *clientImpl) CancelMarketOrders(ctx context.Context, req *clobtypes.CancelMarketOrdersRequest) (clobtypes.CancelMarketOrdersResponse, error) {
+	var resp clobtypes.CancelMarketOrdersResponse
 	err := c.httpClient.Delete(ctx, "/cancel-market-orders", req, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Order(ctx context.Context, id string) (OrderResponse, error) {
-	var resp OrderResponse
+func (c *clientImpl) Order(ctx context.Context, id string) (clobtypes.OrderResponse, error) {
+	var resp clobtypes.OrderResponse
 	err := c.httpClient.Get(ctx, fmt.Sprintf("/data/order/%s", id), nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Orders(ctx context.Context, req *OrdersRequest) (OrdersResponse, error) {
+func (c *clientImpl) Orders(ctx context.Context, req *clobtypes.OrdersRequest) (clobtypes.OrdersResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		if req.ID != "" {
@@ -695,12 +763,12 @@ func (c *clientImpl) Orders(ctx context.Context, req *OrdersRequest) (OrdersResp
 			q.Set("next_cursor", nextCursor)
 		}
 	}
-	var resp OrdersResponse
+	var resp clobtypes.OrdersResponse
 	err := c.httpClient.Get(ctx, "/data/orders", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Trades(ctx context.Context, req *TradesRequest) (TradesResponse, error) {
+func (c *clientImpl) Trades(ctx context.Context, req *clobtypes.TradesRequest) (clobtypes.TradesResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		if req.ID != "" {
@@ -735,14 +803,14 @@ func (c *clientImpl) Trades(ctx context.Context, req *TradesRequest) (TradesResp
 			q.Set("next_cursor", nextCursor)
 		}
 	}
-	var resp TradesResponse
+	var resp clobtypes.TradesResponse
 	err := c.httpClient.Get(ctx, "/data/trades", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) OrdersAll(ctx context.Context, req *OrdersRequest) ([]OrderResponse, error) {
-	var results []OrderResponse
-	cursor := InitialCursor
+func (c *clientImpl) OrdersAll(ctx context.Context, req *clobtypes.OrdersRequest) ([]clobtypes.OrderResponse, error) {
+	var results []clobtypes.OrderResponse
+	cursor := clobtypes.InitialCursor
 	if req != nil {
 		if req.NextCursor != "" {
 			cursor = req.NextCursor
@@ -751,11 +819,11 @@ func (c *clientImpl) OrdersAll(ctx context.Context, req *OrdersRequest) ([]Order
 		}
 	}
 	if cursor == "" {
-		cursor = InitialCursor
+		cursor = clobtypes.InitialCursor
 	}
 
-	for cursor != EndCursor {
-		nextReq := OrdersRequest{}
+	for cursor != clobtypes.EndCursor {
+		nextReq := clobtypes.OrdersRequest{}
 		if req != nil {
 			nextReq = *req
 		}
@@ -776,9 +844,9 @@ func (c *clientImpl) OrdersAll(ctx context.Context, req *OrdersRequest) ([]Order
 	return results, nil
 }
 
-func (c *clientImpl) TradesAll(ctx context.Context, req *TradesRequest) ([]Trade, error) {
-	var results []Trade
-	cursor := InitialCursor
+func (c *clientImpl) TradesAll(ctx context.Context, req *clobtypes.TradesRequest) ([]clobtypes.Trade, error) {
+	var results []clobtypes.Trade
+	cursor := clobtypes.InitialCursor
 	if req != nil {
 		if req.NextCursor != "" {
 			cursor = req.NextCursor
@@ -787,11 +855,11 @@ func (c *clientImpl) TradesAll(ctx context.Context, req *TradesRequest) ([]Trade
 		}
 	}
 	if cursor == "" {
-		cursor = InitialCursor
+		cursor = clobtypes.InitialCursor
 	}
 
-	for cursor != EndCursor {
-		nextReq := TradesRequest{}
+	for cursor != clobtypes.EndCursor {
+		nextReq := clobtypes.TradesRequest{}
 		if req != nil {
 			nextReq = *req
 		}
@@ -812,9 +880,9 @@ func (c *clientImpl) TradesAll(ctx context.Context, req *TradesRequest) ([]Trade
 	return results, nil
 }
 
-func (c *clientImpl) BuilderTradesAll(ctx context.Context, req *BuilderTradesRequest) ([]Trade, error) {
-	var results []Trade
-	cursor := InitialCursor
+func (c *clientImpl) BuilderTradesAll(ctx context.Context, req *clobtypes.BuilderTradesRequest) ([]clobtypes.Trade, error) {
+	var results []clobtypes.Trade
+	cursor := clobtypes.InitialCursor
 	if req != nil {
 		if req.NextCursor != "" {
 			cursor = req.NextCursor
@@ -823,11 +891,11 @@ func (c *clientImpl) BuilderTradesAll(ctx context.Context, req *BuilderTradesReq
 		}
 	}
 	if cursor == "" {
-		cursor = InitialCursor
+		cursor = clobtypes.InitialCursor
 	}
 
-	for cursor != EndCursor {
-		nextReq := BuilderTradesRequest{}
+	for cursor != clobtypes.EndCursor {
+		nextReq := clobtypes.BuilderTradesRequest{}
 		if req != nil {
 			nextReq = *req
 		}
@@ -847,17 +915,17 @@ func (c *clientImpl) BuilderTradesAll(ctx context.Context, req *BuilderTradesReq
 
 	return results, nil
 }
-func (c *clientImpl) OrderScoring(ctx context.Context, req *OrderScoringRequest) (OrderScoringResponse, error) {
+func (c *clientImpl) OrderScoring(ctx context.Context, req *clobtypes.OrderScoringRequest) (clobtypes.OrderScoringResponse, error) {
 	q := url.Values{}
 	if req != nil && req.ID != "" {
 		q.Set("order_id", req.ID)
 	}
-	var resp OrderScoringResponse
+	var resp clobtypes.OrderScoringResponse
 	err := c.httpClient.Get(ctx, "/order-scoring", q, &resp)
 	return resp, err
 }
-func (c *clientImpl) OrdersScoring(ctx context.Context, req *OrdersScoringRequest) (OrdersScoringResponse, error) {
-	var resp OrdersScoringResponse
+func (c *clientImpl) OrdersScoring(ctx context.Context, req *clobtypes.OrdersScoringRequest) (clobtypes.OrdersScoringResponse, error) {
+	var resp clobtypes.OrdersScoringResponse
 	var body []string
 	if req != nil {
 		body = req.IDs
@@ -865,17 +933,17 @@ func (c *clientImpl) OrdersScoring(ctx context.Context, req *OrdersScoringReques
 	err := c.httpClient.Post(ctx, "/orders-scoring", body, &resp)
 	return resp, err
 }
-func (c *clientImpl) BalanceAllowance(ctx context.Context, req *BalanceAllowanceRequest) (BalanceAllowanceResponse, error) {
+func (c *clientImpl) BalanceAllowance(ctx context.Context, req *clobtypes.BalanceAllowanceRequest) (clobtypes.BalanceAllowanceResponse, error) {
 	q := url.Values{}
 	if req != nil && req.Asset != "" {
 		q.Set("asset", req.Asset)
 	}
-	var resp BalanceAllowanceResponse
+	var resp clobtypes.BalanceAllowanceResponse
 	err := c.httpClient.Get(ctx, "/balance-allowance", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) UpdateBalanceAllowance(ctx context.Context, req *BalanceAllowanceUpdateRequest) (BalanceAllowanceResponse, error) {
+func (c *clientImpl) UpdateBalanceAllowance(ctx context.Context, req *clobtypes.BalanceAllowanceUpdateRequest) (clobtypes.BalanceAllowanceResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		if req.Asset != "" {
@@ -885,27 +953,27 @@ func (c *clientImpl) UpdateBalanceAllowance(ctx context.Context, req *BalanceAll
 			q.Set("amount", req.Amount)
 		}
 	}
-	var resp BalanceAllowanceResponse
+	var resp clobtypes.BalanceAllowanceResponse
 	err := c.httpClient.Get(ctx, "/balance-allowance/update", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Notifications(ctx context.Context, req *NotificationsRequest) (NotificationsResponse, error) {
+func (c *clientImpl) Notifications(ctx context.Context, req *clobtypes.NotificationsRequest) (clobtypes.NotificationsResponse, error) {
 	q := url.Values{}
 	if req != nil && req.Limit > 0 {
 		q.Set("limit", strconv.Itoa(req.Limit))
 	}
-	var resp NotificationsResponse
+	var resp clobtypes.NotificationsResponse
 	err := c.httpClient.Get(ctx, "/notifications", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) DropNotifications(ctx context.Context, req *DropNotificationsRequest) (DropNotificationsResponse, error) {
+func (c *clientImpl) DropNotifications(ctx context.Context, req *clobtypes.DropNotificationsRequest) (clobtypes.DropNotificationsResponse, error) {
 	q := url.Values{}
 	if req != nil && req.ID != "" {
 		q.Set("id", req.ID)
 	}
-	var resp DropNotificationsResponse
+	var resp clobtypes.DropNotificationsResponse
 	var err error
 	if len(q) > 0 {
 		err = c.httpClient.Call(ctx, "DELETE", "/notifications", q, nil, &resp, nil)
@@ -915,80 +983,68 @@ func (c *clientImpl) DropNotifications(ctx context.Context, req *DropNotificatio
 	return resp, err
 }
 
-func (c *clientImpl) UserEarnings(ctx context.Context, req *UserEarningsRequest) (UserEarningsResponse, error) {
+func (c *clientImpl) UserEarnings(ctx context.Context, req *clobtypes.UserEarningsRequest) (clobtypes.UserEarningsResponse, error) {
 	q := url.Values{}
 	if req != nil && req.Asset != "" {
 		q.Set("asset", req.Asset)
 	}
-	var resp UserEarningsResponse
+	var resp clobtypes.UserEarningsResponse
 	err := c.httpClient.Get(ctx, "/rewards/user", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) UserTotalEarnings(ctx context.Context, req *UserTotalEarningsRequest) (UserTotalEarningsResponse, error) {
+func (c *clientImpl) UserTotalEarnings(ctx context.Context, req *clobtypes.UserTotalEarningsRequest) (clobtypes.UserTotalEarningsResponse, error) {
 	q := url.Values{}
 	if req != nil && req.Asset != "" {
 		q.Set("asset", req.Asset)
 	}
-	var resp UserTotalEarningsResponse
+	var resp clobtypes.UserTotalEarningsResponse
 	err := c.httpClient.Get(ctx, "/rewards/user/total", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) UserRewardPercentages(ctx context.Context, req *UserRewardPercentagesRequest) (UserRewardPercentagesResponse, error) {
-	var resp UserRewardPercentagesResponse
+func (c *clientImpl) UserRewardPercentages(ctx context.Context, req *clobtypes.UserRewardPercentagesRequest) (clobtypes.UserRewardPercentagesResponse, error) {
+	var resp clobtypes.UserRewardPercentagesResponse
 	err := c.httpClient.Get(ctx, "/rewards/user/percentages", nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) RewardsMarketsCurrent(ctx context.Context) (RewardsMarketsResponse, error) {
-	var resp RewardsMarketsResponse
+func (c *clientImpl) RewardsMarketsCurrent(ctx context.Context) (clobtypes.RewardsMarketsResponse, error) {
+	var resp clobtypes.RewardsMarketsResponse
 	err := c.httpClient.Get(ctx, "/rewards/markets/current", nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) RewardsMarkets(ctx context.Context, id string) (RewardsMarketResponse, error) {
-	var resp RewardsMarketResponse
+func (c *clientImpl) RewardsMarkets(ctx context.Context, id string) (clobtypes.RewardsMarketResponse, error) {
+	var resp clobtypes.RewardsMarketResponse
 	err := c.httpClient.Get(ctx, fmt.Sprintf("/rewards/markets/%s", id), nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) UserRewardsByMarket(ctx context.Context, req *UserRewardsByMarketRequest) (UserRewardsByMarketResponse, error) {
+func (c *clientImpl) UserRewardsByMarket(ctx context.Context, req *clobtypes.UserRewardsByMarketRequest) (clobtypes.UserRewardsByMarketResponse, error) {
 	q := url.Values{}
 	if req != nil && req.MarketID != "" {
 		q.Set("market_id", req.MarketID)
 	}
-	var resp UserRewardsByMarketResponse
+	var resp clobtypes.UserRewardsByMarketResponse
 	err := c.httpClient.Get(ctx, "/rewards/user/markets", q, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) MarketTradesEvents(ctx context.Context, id string) (MarketTradesEventsResponse, error) {
-	var resp MarketTradesEventsResponse
-	err := c.httpClient.Get(ctx, fmt.Sprintf("/live-activity/events/%s", id), nil, &resp)
+func (c *clientImpl) MarketTradesEvents(ctx context.Context, id string) (clobtypes.MarketTradesEventsResponse, error) {
+	var resp clobtypes.MarketTradesEventsResponse
+	err := c.httpClient.Get(ctx, "/v1/market-trades-events/"+id, nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) Heartbeat(ctx context.Context, req *HeartbeatRequest) (HeartbeatResponse, error) {
-	var resp HeartbeatResponse
-	var body interface{}
-	if req != nil && req.HeartbeatID != "" {
-		body = map[string]string{"heartbeat_id": req.HeartbeatID}
-	} else {
-		body = map[string]interface{}{"heartbeat_id": nil}
-	}
-	err := c.httpClient.Post(ctx, "/v1/heartbeats", body, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) CreateAPIKey(ctx context.Context) (APIKeyResponse, error) {
+func (c *clientImpl) CreateAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error) {
 	if c.signer == nil {
-		return APIKeyResponse{}, auth.ErrMissingSigner
+		return clobtypes.APIKeyResponse{}, auth.ErrMissingSigner
 	}
 
 	headersRaw, err := auth.BuildL1Headers(c.signer, 0, 0)
 	if err != nil {
-		return APIKeyResponse{}, err
+		return clobtypes.APIKeyResponse{}, err
 	}
 
 	headers := map[string]string{
@@ -998,21 +1054,21 @@ func (c *clientImpl) CreateAPIKey(ctx context.Context) (APIKeyResponse, error) {
 		auth.HeaderPolySignature: headersRaw.Get(auth.HeaderPolySignature),
 	}
 
-	var resp APIKeyResponse
+	var resp clobtypes.APIKeyResponse
 	// Note: We use CallWithHeaders to inject L1 headers.
-	// CreateAPIKey uses POST /auth/api-key
+	// clobtypes.CreateAPIKey uses POST /auth/api-key
 	err = c.httpClient.CallWithHeaders(ctx, "POST", "/auth/api-key", nil, nil, &resp, headers)
 	return resp, err
 }
 
-func (c *clientImpl) ListAPIKeys(ctx context.Context) (APIKeyListResponse, error) {
-	var resp APIKeyListResponse
+func (c *clientImpl) ListAPIKeys(ctx context.Context) (clobtypes.APIKeyListResponse, error) {
+	var resp clobtypes.APIKeyListResponse
 	err := c.httpClient.Get(ctx, "/auth/api-keys", nil, &resp)
 	return resp, err
 }
 
-func (c *clientImpl) DeleteAPIKey(ctx context.Context, id string) (APIKeyResponse, error) {
-	var resp APIKeyResponse
+func (c *clientImpl) DeleteAPIKey(ctx context.Context, id string) (clobtypes.APIKeyResponse, error) {
+	var resp clobtypes.APIKeyResponse
 	q := url.Values{}
 	if id != "" {
 		q.Set("api_key", id)
@@ -1025,11 +1081,11 @@ func (c *clientImpl) DeleteAPIKey(ctx context.Context, id string) (APIKeyRespons
 	return resp, err
 }
 
-func (c *clientImpl) DeriveAPIKey(ctx context.Context) (APIKeyResponse, error) {
-	var resp APIKeyResponse
+func (c *clientImpl) DeriveAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error) {
+	var resp clobtypes.APIKeyResponse
 	headersRaw, err := auth.BuildL1Headers(c.signer, 0, 0)
 	if err != nil {
-		return APIKeyResponse{}, err
+		return clobtypes.APIKeyResponse{}, err
 	}
 	headers := map[string]string{
 		auth.HeaderPolyAddress:   headersRaw.Get(auth.HeaderPolyAddress),
@@ -1040,28 +1096,28 @@ func (c *clientImpl) DeriveAPIKey(ctx context.Context) (APIKeyResponse, error) {
 	err = c.httpClient.CallWithHeaders(ctx, "GET", "/auth/derive-api-key", nil, nil, &resp, headers)
 	return resp, err
 }
-func (c *clientImpl) ClosedOnlyStatus(ctx context.Context) (ClosedOnlyResponse, error) {
-	var resp ClosedOnlyResponse
+func (c *clientImpl) ClosedOnlyStatus(ctx context.Context) (clobtypes.ClosedOnlyResponse, error) {
+	var resp clobtypes.ClosedOnlyResponse
 	err := c.httpClient.Get(ctx, "/auth/ban-status/closed-only", nil, &resp)
 	return resp, err
 }
-func (c *clientImpl) CreateReadonlyAPIKey(ctx context.Context) (APIKeyResponse, error) {
-	var resp APIKeyResponse
+func (c *clientImpl) CreateReadonlyAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error) {
+	var resp clobtypes.APIKeyResponse
 	err := c.httpClient.Post(ctx, "/auth/readonly-api-key", nil, &resp)
 	return resp, err
 }
-func (c *clientImpl) ListReadonlyAPIKeys(ctx context.Context) (APIKeyListResponse, error) {
-	var resp APIKeyListResponse
+func (c *clientImpl) ListReadonlyAPIKeys(ctx context.Context) (clobtypes.APIKeyListResponse, error) {
+	var resp clobtypes.APIKeyListResponse
 	err := c.httpClient.Get(ctx, "/auth/readonly-api-keys", nil, &resp)
 	return resp, err
 }
-func (c *clientImpl) DeleteReadonlyAPIKey(ctx context.Context, id string) (APIKeyResponse, error) {
-	var resp APIKeyResponse
+func (c *clientImpl) DeleteReadonlyAPIKey(ctx context.Context, id string) (clobtypes.APIKeyResponse, error) {
+	var resp clobtypes.APIKeyResponse
 	body := map[string]string{"key": id}
 	err := c.httpClient.Delete(ctx, "/auth/readonly-api-key", body, &resp)
 	return resp, err
 }
-func (c *clientImpl) ValidateReadonlyAPIKey(ctx context.Context, req *ValidateReadonlyAPIKeyRequest) (ValidateReadonlyAPIKeyResponse, error) {
+func (c *clientImpl) ValidateReadonlyAPIKey(ctx context.Context, req *clobtypes.ValidateReadonlyAPIKeyRequest) (clobtypes.ValidateReadonlyAPIKeyResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		if req.Address != "" {
@@ -1071,26 +1127,26 @@ func (c *clientImpl) ValidateReadonlyAPIKey(ctx context.Context, req *ValidateRe
 			q.Set("key", req.APIKey)
 		}
 	}
-	var resp ValidateReadonlyAPIKeyResponse
+	var resp clobtypes.ValidateReadonlyAPIKeyResponse
 	err := c.httpClient.Get(ctx, "/auth/validate-readonly-api-key", q, &resp)
 	return resp, err
 }
-func (c *clientImpl) CreateBuilderAPIKey(ctx context.Context) (APIKeyResponse, error) {
-	var resp APIKeyResponse
+func (c *clientImpl) CreateBuilderAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error) {
+	var resp clobtypes.APIKeyResponse
 	err := c.httpClient.Post(ctx, "/auth/builder-api-key", nil, &resp)
 	return resp, err
 }
-func (c *clientImpl) ListBuilderAPIKeys(ctx context.Context) (APIKeyListResponse, error) {
-	var resp APIKeyListResponse
+func (c *clientImpl) ListBuilderAPIKeys(ctx context.Context) (clobtypes.APIKeyListResponse, error) {
+	var resp clobtypes.APIKeyListResponse
 	err := c.httpClient.Get(ctx, "/auth/builder-api-key", nil, &resp)
 	return resp, err
 }
-func (c *clientImpl) RevokeBuilderAPIKey(ctx context.Context, id string) (APIKeyResponse, error) {
+func (c *clientImpl) RevokeBuilderAPIKey(ctx context.Context, id string) (clobtypes.APIKeyResponse, error) {
 	// Endpoint returns empty body; ignore response.
 	err := c.httpClient.Call(ctx, "DELETE", "/auth/builder-api-key", nil, nil, nil, nil)
-	return APIKeyResponse{}, err
+	return clobtypes.APIKeyResponse{}, err
 }
-func (c *clientImpl) BuilderTrades(ctx context.Context, req *BuilderTradesRequest) (BuilderTradesResponse, error) {
+func (c *clientImpl) BuilderTrades(ctx context.Context, req *clobtypes.BuilderTradesRequest) (clobtypes.BuilderTradesResponse, error) {
 	q := url.Values{}
 	if req != nil {
 		if req.ID != "" {
@@ -1122,186 +1178,7 @@ func (c *clientImpl) BuilderTrades(ctx context.Context, req *BuilderTradesReques
 			q.Set("next_cursor", nextCursor)
 		}
 	}
-	var resp BuilderTradesResponse
+	var resp clobtypes.BuilderTradesResponse
 	err := c.httpClient.Get(ctx, "/builder/trades", q, &resp)
 	return resp, err
-}
-func (c *clientImpl) CreateRFQRequest(ctx context.Context, req *RFQRequest) (RFQRequestResponse, error) {
-	var resp RFQRequestResponse
-	err := c.httpClient.Post(ctx, "/rfq/request", req, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) CancelRFQRequest(ctx context.Context, req *RFQCancelRequest) (RFQCancelResponse, error) {
-	var resp RFQCancelResponse
-	err := c.httpClient.Delete(ctx, "/rfq/request", req, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) RFQRequests(ctx context.Context, req *RFQRequestsQuery) (RFQRequestsResponse, error) {
-	var resp RFQRequestsResponse
-	q := url.Values{}
-	if req != nil {
-		applyRFQPagination(&q, req.Limit, req.Offset, req.Cursor)
-		applyRFQFilters(&q, req.State, req.RequestIDs, nil, req.Markets, req.SizeMin, req.SizeMax, req.SizeUsdcMin, req.SizeUsdcMax, req.PriceMin, req.PriceMax, req.SortBy, req.SortDir)
-	}
-	err := c.httpClient.Get(ctx, "/rfq/data/requests", q, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) CreateRFQQuote(ctx context.Context, req *RFQQuote) (RFQQuoteResponse, error) {
-	var resp RFQQuoteResponse
-	err := c.httpClient.Post(ctx, "/rfq/quote", req, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) CancelRFQQuote(ctx context.Context, req *RFQCancelQuote) (RFQCancelResponse, error) {
-	var resp RFQCancelResponse
-	err := c.httpClient.Delete(ctx, "/rfq/quote", req, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) RFQRequesterQuotes(ctx context.Context, req *RFQRequesterQuotesQuery) (RFQQuotesResponse, error) {
-	var resp RFQQuotesResponse
-	q := url.Values{}
-	if req != nil {
-		requestIDs := req.RequestIDs
-		if req.RequestID != "" {
-			q.Set("request_id", req.RequestID)
-			if len(requestIDs) == 0 {
-				requestIDs = []string{req.RequestID}
-			}
-		}
-		applyRFQPagination(&q, req.Limit, req.Offset, req.Cursor)
-		applyRFQFilters(&q, req.State, requestIDs, req.QuoteIDs, req.Markets, req.SizeMin, req.SizeMax, req.SizeUsdcMin, req.SizeUsdcMax, req.PriceMin, req.PriceMax, req.SortBy, req.SortDir)
-	}
-	err := c.httpClient.Get(ctx, "/rfq/data/requester/quotes", q, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) RFQQuoterQuotes(ctx context.Context, req *RFQQuoterQuotesQuery) (RFQQuotesResponse, error) {
-	var resp RFQQuotesResponse
-	q := url.Values{}
-	if req != nil {
-		requestIDs := req.RequestIDs
-		if req.RequestID != "" {
-			q.Set("request_id", req.RequestID)
-			if len(requestIDs) == 0 {
-				requestIDs = []string{req.RequestID}
-			}
-		}
-		applyRFQPagination(&q, req.Limit, req.Offset, req.Cursor)
-		applyRFQFilters(&q, req.State, requestIDs, req.QuoteIDs, req.Markets, req.SizeMin, req.SizeMax, req.SizeUsdcMin, req.SizeUsdcMax, req.PriceMin, req.PriceMax, req.SortBy, req.SortDir)
-	}
-	err := c.httpClient.Get(ctx, "/rfq/data/quoter/quotes", q, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) RFQBestQuote(ctx context.Context, req *RFQBestQuoteQuery) (RFQBestQuoteResponse, error) {
-	var resp RFQBestQuoteResponse
-	q := url.Values{}
-	if req != nil {
-		requestIDs := req.RequestIDs
-		if req.RequestID != "" {
-			q.Set("request_id", req.RequestID)
-			if len(requestIDs) == 0 {
-				requestIDs = []string{req.RequestID}
-			}
-		}
-		if len(requestIDs) > 0 {
-			q.Set("requestIds", strings.Join(requestIDs, ","))
-		}
-	}
-	err := c.httpClient.Get(ctx, "/rfq/data/best-quote", q, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) RFQRequestAccept(ctx context.Context, req *RFQAcceptRequest) (RFQAcceptResponse, error) {
-	var resp RFQAcceptResponse
-	err := c.httpClient.Post(ctx, "/rfq/request/accept", req, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) RFQQuoteApprove(ctx context.Context, req *RFQApproveQuote) (RFQApproveResponse, error) {
-	var resp RFQApproveResponse
-	err := c.httpClient.Post(ctx, "/rfq/quote/approve", req, &resp)
-	return resp, err
-}
-
-func (c *clientImpl) RFQConfig(ctx context.Context) (RFQConfigResponse, error) {
-	var resp RFQConfigResponse
-	err := c.httpClient.Get(ctx, "/rfq/config", nil, &resp)
-	return resp, err
-}
-
-func applyRFQPagination(q *url.Values, limit int, offset, cursor string) {
-	if q == nil {
-		return
-	}
-	if limit > 0 {
-		q.Set("limit", strconv.Itoa(limit))
-	}
-	if offset == "" && cursor != "" {
-		offset = cursor
-	}
-	if cursor != "" {
-		q.Set("cursor", cursor)
-	}
-	if offset != "" {
-		q.Set("offset", offset)
-	}
-}
-
-func applyRFQFilters(q *url.Values, state RFQState, requestIDs, quoteIDs, markets []string, sizeMin, sizeMax, sizeUsdcMin, sizeUsdcMax, priceMin, priceMax string, sortBy RFQSortBy, sortDir RFQSortDir) {
-	if q == nil {
-		return
-	}
-	if state != "" {
-		q.Set("state", string(state))
-	}
-	if len(requestIDs) > 0 {
-		joined := strings.Join(requestIDs, ",")
-		q.Set("requestIds", joined)
-		q.Set("request_ids", joined)
-	}
-	if len(quoteIDs) > 0 {
-		joined := strings.Join(quoteIDs, ",")
-		q.Set("quoteIds", joined)
-		q.Set("quote_ids", joined)
-	}
-	if len(markets) > 0 {
-		q.Set("markets", strings.Join(markets, ","))
-	}
-	if sizeMin != "" {
-		q.Set("sizeMin", sizeMin)
-		q.Set("size_min", sizeMin)
-	}
-	if sizeMax != "" {
-		q.Set("sizeMax", sizeMax)
-		q.Set("size_max", sizeMax)
-	}
-	if sizeUsdcMin != "" {
-		q.Set("sizeUsdcMin", sizeUsdcMin)
-		q.Set("size_usdc_min", sizeUsdcMin)
-	}
-	if sizeUsdcMax != "" {
-		q.Set("sizeUsdcMax", sizeUsdcMax)
-		q.Set("size_usdc_max", sizeUsdcMax)
-	}
-	if priceMin != "" {
-		q.Set("priceMin", priceMin)
-		q.Set("price_min", priceMin)
-	}
-	if priceMax != "" {
-		q.Set("priceMax", priceMax)
-		q.Set("price_max", priceMax)
-	}
-	if sortBy != "" {
-		q.Set("sortBy", string(sortBy))
-		q.Set("sort_by", string(sortBy))
-	}
-	if sortDir != "" {
-		q.Set("sortDir", string(sortDir))
-		q.Set("sort_dir", string(sortDir))
-	}
 }

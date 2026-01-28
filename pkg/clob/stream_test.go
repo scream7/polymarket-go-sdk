@@ -1,6 +1,7 @@
 package clob
 
 import (
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"context"
 	"testing"
 )
@@ -8,12 +9,12 @@ import (
 func TestStreamData(t *testing.T) {
 	fetch := func(ctx context.Context, cursor string) ([]int, string, error) {
 		switch cursor {
-		case InitialCursor:
+		case clobtypes.InitialCursor:
 			return []int{1, 2}, "NEXT", nil
 		case "NEXT":
-			return []int{3}, EndCursor, nil
+			return []int{3}, clobtypes.EndCursor, nil
 		default:
-			return nil, EndCursor, nil
+			return nil, clobtypes.EndCursor, nil
 		}
 	}
 

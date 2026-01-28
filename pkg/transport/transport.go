@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/types"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 )
 
 // Doer matches http.Client's Do method.
@@ -43,7 +43,7 @@ func NewClient(httpClient Doer, baseURL string) *Client {
 	return &Client{
 		httpClient: httpClient,
 		baseURL:    baseURL,
-		userAgent:  "go-polymarket-sdk/1.0",
+		userAgent:  "github.com/GoPolymarket/polymarket-go-sdk/1.0",
 	}
 }
 

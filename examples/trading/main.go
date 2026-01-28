@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"context"
 	"fmt"
 	"log"
@@ -12,10 +13,10 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/shopspring/decimal"
 
-	"go-polymarket-sdk"
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/clob"
-	"go-polymarket-sdk/pkg/types"
+	"github.com/GoPolymarket/polymarket-go-sdk"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	
+"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 )
 
 func main() {
@@ -50,7 +51,7 @@ func main() {
 
 	// 4. Create an Order (Example)
 	// Note: This requires valid TokenID and sufficient balance/allowance to succeed on server
-	order := &clob.Order{
+	order := &clobtypes.Order{
 		Maker:       types.Address(signer.Address()),
 		Taker:       common.HexToAddress("0x0000000000000000000000000000000000000000"), // Open order
 		TokenID:     types.U256{Int: big.NewInt(123456789)},                            // Dummy Token ID

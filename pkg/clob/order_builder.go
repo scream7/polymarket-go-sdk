@@ -11,8 +11,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/types"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 )
 
 // OrderBuilder helps construct valid orders with correct addresses and nonces.
@@ -26,7 +27,7 @@ type OrderBuilder struct {
 	size       float64
 	feeRateBps float64
 	tickSize   string
-	orderType  OrderType
+	orderType  clobtypes.OrderType
 
 	// Optional overrides
 	maker         *common.Address
@@ -116,8 +117,8 @@ func (b *OrderBuilder) Taker(taker common.Address) *OrderBuilder {
 	return b
 }
 
-// OrderType sets the order type (GTC/GTD/FAK/FOK).
-func (b *OrderBuilder) OrderType(orderType OrderType) *OrderBuilder {
+// clobtypes.OrderType sets the order type (GTC/GTD/FAK/FOK).
+func (b *OrderBuilder) OrderType(orderType clobtypes.OrderType) *OrderBuilder {
 	b.orderType = orderType
 	return b
 }
@@ -152,13 +153,13 @@ func (b *OrderBuilder) AmountShares(amount float64) *OrderBuilder {
 	return b
 }
 
-// Build constructs the Order object using a background context.
-func (b *OrderBuilder) Build() (*Order, error) {
+// Build constructs the clobtypes.Order object using a background context.
+func (b *OrderBuilder) Build() (*clobtypes.Order, error) {
 	return b.BuildWithContext(context.Background())
 }
 
-// BuildWithContext constructs the Order object using the provided context for API lookups.
-func (b *OrderBuilder) BuildWithContext(ctx context.Context) (*Order, error) {
+// BuildWithContext constructs the clobtypes.Order object using the provided context for API lookups.
+func (b *OrderBuilder) BuildWithContext(ctx context.Context) (*clobtypes.Order, error) {
 	order, err := b.buildLimit(ctx)
 	if err != nil {
 		return nil, err
@@ -167,29 +168,29 @@ func (b *OrderBuilder) BuildWithContext(ctx context.Context) (*Order, error) {
 }
 
 // BuildSignable constructs a limit order and returns it with order type metadata.
-func (b *OrderBuilder) BuildSignable() (*SignableOrder, error) {
+func (b *OrderBuilder) BuildSignable() (*clobtypes.SignableOrder, error) {
 	return b.BuildSignableWithContext(context.Background())
 }
 
 // BuildSignableWithContext constructs a limit order and returns it with order type metadata.
-func (b *OrderBuilder) BuildSignableWithContext(ctx context.Context) (*SignableOrder, error) {
+func (b *OrderBuilder) BuildSignableWithContext(ctx context.Context) (*clobtypes.SignableOrder, error) {
 	order, err := b.buildLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	orderType := normalizeOrderType(b.orderType, OrderTypeGTC)
-	if b.expiration != nil && b.expiration.Sign() > 0 && orderType != OrderTypeGTD {
+	orderType := normalizeOrderType(b.orderType, clobtypes.OrderTypeGTC)
+	if b.expiration != nil && b.expiration.Sign() > 0 && orderType != clobtypes.OrderTypeGTD {
 		return nil, fmt.Errorf("expiration is only supported for GTD orders")
 	}
-	if orderType == OrderTypeGTD && (b.expiration == nil || b.expiration.Sign() == 0) {
+	if orderType == clobtypes.OrderTypeGTD && (b.expiration == nil || b.expiration.Sign() == 0) {
 		return nil, fmt.Errorf("GTD orders require a non-zero expiration")
 	}
-	if b.postOnly != nil && *b.postOnly && orderType != OrderTypeGTC && orderType != OrderTypeGTD {
+	if b.postOnly != nil && *b.postOnly && orderType != clobtypes.OrderTypeGTC && orderType != clobtypes.OrderTypeGTD {
 		return nil, fmt.Errorf("postOnly is only supported for GTC and GTD orders")
 	}
 
-	return &SignableOrder{
+	return &clobtypes.SignableOrder{
 		Order:     order,
 		OrderType: orderType,
 		PostOnly:  b.postOnly,
@@ -197,12 +198,12 @@ func (b *OrderBuilder) BuildSignableWithContext(ctx context.Context) (*SignableO
 }
 
 // BuildMarket constructs a market order and returns it with order type metadata.
-func (b *OrderBuilder) BuildMarket() (*SignableOrder, error) {
+func (b *OrderBuilder) BuildMarket() (*clobtypes.SignableOrder, error) {
 	return b.BuildMarketWithContext(context.Background())
 }
 
 // BuildMarketWithContext constructs a market order and returns it with order type metadata.
-func (b *OrderBuilder) BuildMarketWithContext(ctx context.Context) (*SignableOrder, error) {
+func (b *OrderBuilder) BuildMarketWithContext(ctx context.Context) (*clobtypes.SignableOrder, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -233,8 +234,8 @@ func (b *OrderBuilder) BuildMarketWithContext(ctx context.Context) (*SignableOrd
 		return nil, fmt.Errorf("unsupported market order amount")
 	}
 
-	orderType := normalizeOrderType(b.orderType, OrderTypeFAK)
-	if orderType != OrderTypeFAK && orderType != OrderTypeFOK {
+	orderType := normalizeOrderType(b.orderType, clobtypes.OrderTypeFAK)
+	if orderType != clobtypes.OrderTypeFAK && orderType != clobtypes.OrderTypeFOK {
 		return nil, fmt.Errorf("market orders require FAK or FOK order type")
 	}
 	if b.postOnly != nil && *b.postOnly {
@@ -356,7 +357,7 @@ func (b *OrderBuilder) BuildMarketWithContext(ctx context.Context) (*SignableOrd
 		return nil, err
 	}
 
-	order := &Order{
+	order := &clobtypes.Order{
 		Salt:          types.U256{Int: salt},
 		Signer:        b.signer.Address(),
 		Maker:         maker,
@@ -371,13 +372,13 @@ func (b *OrderBuilder) BuildMarketWithContext(ctx context.Context) (*SignableOrd
 		SignatureType: &sigType,
 	}
 
-	return &SignableOrder{
+	return &clobtypes.SignableOrder{
 		Order:     order,
 		OrderType: orderType,
 	}, nil
 }
 
-func (b *OrderBuilder) buildLimit(ctx context.Context) (*Order, error) {
+func (b *OrderBuilder) buildLimit(ctx context.Context) (*clobtypes.Order, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -501,7 +502,7 @@ func (b *OrderBuilder) buildLimit(ctx context.Context) (*Order, error) {
 		expiration = b.expiration
 	}
 
-	return &Order{
+	return &clobtypes.Order{
 		Salt:          types.U256{Int: salt},
 		Signer:        b.signer.Address(),
 		Maker:         maker,
@@ -532,7 +533,7 @@ func (b *OrderBuilder) resolveTickSize(ctx context.Context, tokenID string) (dec
 
 	hasClient := clientHasTransport(b.client)
 	if hasClient {
-		resp, err := b.client.TickSize(ctx, &TickSizeRequest{TokenID: tokenID})
+		resp, err := b.client.TickSize(ctx, &clobtypes.TickSizeRequest{TokenID: tokenID})
 		if err != nil {
 			if override != nil {
 				return *override, nil
@@ -581,7 +582,7 @@ func (b *OrderBuilder) resolveFeeRateBps(ctx context.Context, tokenID string) (i
 		return userFee, nil
 	}
 
-	resp, err := b.client.FeeRate(ctx, &FeeRateRequest{TokenID: tokenID})
+	resp, err := b.client.FeeRate(ctx, &clobtypes.FeeRateRequest{TokenID: tokenID})
 	if err != nil {
 		if userFee > 0 {
 			return userFee, nil
@@ -607,19 +608,19 @@ func (b *OrderBuilder) resolveFeeRateBps(ctx context.Context, tokenID string) (i
 	return userFee, nil
 }
 
-func (b *OrderBuilder) resolveMarketPrice(ctx context.Context, side string, orderType OrderType, amount *marketAmount) (decimal.Decimal, error) {
+func (b *OrderBuilder) resolveMarketPrice(ctx context.Context, side string, orderType clobtypes.OrderType, amount *marketAmount) (decimal.Decimal, error) {
 	if amount == nil {
 		return decimal.Decimal{}, fmt.Errorf("amount is required")
 	}
 	if b.client == nil || !clientHasTransport(b.client) {
 		return decimal.Decimal{}, fmt.Errorf("client is required to fetch order book")
 	}
-	book, err := b.client.OrderBook(ctx, &BookRequest{TokenID: b.tokenID})
+	book, err := b.client.OrderBook(ctx, &clobtypes.BookRequest{TokenID: b.tokenID})
 	if err != nil {
 		return decimal.Decimal{}, err
 	}
 
-	var levels []PriceLevel
+	var levels []clobtypes.PriceLevel
 	switch side {
 	case "BUY":
 		levels = book.Asks
@@ -666,7 +667,7 @@ func (b *OrderBuilder) resolveMarketPrice(ctx context.Context, side string, orde
 	if cutoff != nil {
 		return *cutoff, nil
 	}
-	if orderType == OrderTypeFOK {
+	if orderType == clobtypes.OrderTypeFOK {
 		return decimal.Decimal{}, fmt.Errorf("insufficient liquidity to fill order")
 	}
 	return firstPrice, nil

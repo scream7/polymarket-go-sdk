@@ -1,14 +1,15 @@
 package main
 
 import (
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"context"
 	"fmt"
 	"log"
 	"os"
 
-	polymarket "go-polymarket-sdk"
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/clob"
+	polymarket "github.com/GoPolymarket/polymarket-go-sdk"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	
 )
 
 func main() {
@@ -32,7 +33,7 @@ func main() {
 
 	ctx := context.Background()
 
-	trades, err := authClient.TradesAll(ctx, &clob.TradesRequest{
+	trades, err := authClient.TradesAll(ctx, &clobtypes.TradesRequest{
 		Limit: 50,
 	})
 	if err != nil {

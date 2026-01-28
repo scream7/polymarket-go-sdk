@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,10 +10,11 @@ import (
 	"strconv"
 	"strings"
 
-	polymarket "go-polymarket-sdk"
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/clob"
-	"go-polymarket-sdk/pkg/gamma"
+	polymarket "github.com/GoPolymarket/polymarket-go-sdk"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob"
+	
+"github.com/GoPolymarket/polymarket-go-sdk/pkg/gamma"
 )
 
 func main() {
@@ -79,7 +81,7 @@ func main() {
 		Side("BUY").
 		Price(0.5).
 		Size(1).
-		OrderType(clob.OrderTypeGTC).
+		OrderType(clobtypes.OrderTypeGTC).
 		BuildSignable()
 	if err != nil {
 		log.Fatalf("BuildSignable failed: %v", err)
@@ -92,7 +94,7 @@ func main() {
 		log.Printf("Order Created! ID: %s", resp.ID)
 	}
 
-	trades, err := builderClient.BuilderTrades(ctx, &clob.BuilderTradesRequest{
+	trades, err := builderClient.BuilderTrades(ctx, &clobtypes.BuilderTradesRequest{
 		Maker: signer.Address().Hex(),
 		Limit: 5,
 	})
@@ -182,7 +184,7 @@ func pickTokenIDFromGamma(ctx context.Context, gammaClient gamma.Client) (string
 func pickTokenIDFromCLOB(ctx context.Context, clobClient clob.Client) (string, string, error) {
 	limit := 50
 	active := true
-	resp, err := clobClient.Markets(ctx, &clob.MarketsRequest{
+	resp, err := clobClient.Markets(ctx, &clobtypes.MarketsRequest{
 		Limit:  limit,
 		Active: &active,
 	})

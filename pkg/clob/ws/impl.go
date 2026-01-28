@@ -1,4 +1,4 @@
-package clobws
+package ws
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go-polymarket-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
 
 	"github.com/gorilla/websocket"
 	"github.com/shopspring/decimal"

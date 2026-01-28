@@ -1,5 +1,7 @@
 package clob
 
+import "github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
+
 import "context"
 
 // StreamResult wraps a streamed item or an error.
@@ -14,7 +16,7 @@ type StreamFetch[T any] func(ctx context.Context, cursor string) ([]T, string, e
 
 // StreamData streams items starting from the initial cursor.
 func StreamData[T any](ctx context.Context, fetch StreamFetch[T]) <-chan StreamResult[T] {
-	return StreamDataWithCursor(ctx, InitialCursor, fetch)
+	return StreamDataWithCursor(ctx, clobtypes.InitialCursor, fetch)
 }
 
 // StreamDataWithCursor streams items starting from a specific cursor.
@@ -26,10 +28,10 @@ func StreamDataWithCursor[T any](ctx context.Context, cursor string, fetch Strea
 			ctx = context.Background()
 		}
 		if cursor == "" {
-			cursor = InitialCursor
+			cursor = clobtypes.InitialCursor
 		}
 
-		for cursor != EndCursor {
+		for cursor != clobtypes.EndCursor {
 			if err := ctx.Err(); err != nil {
 				out <- StreamResult[T]{Err: err}
 				return

@@ -1,13 +1,14 @@
 package main
 
 import (
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"context"
 	"fmt"
 	"log"
 	"time"
 
-	"go-polymarket-sdk"
-	"go-polymarket-sdk/pkg/clob"
+	"github.com/GoPolymarket/polymarket-go-sdk"
+	
 )
 
 func main() {
@@ -27,7 +28,7 @@ func main() {
 	fmt.Println("\n2. Fetching Active Markets (Limit 2)...")
 	limit := 2
 	active := true
-	marketsResp, err := client.CLOB.Markets(ctx, &clob.MarketsRequest{
+	marketsResp, err := client.CLOB.Markets(ctx, &clobtypes.MarketsRequest{
 		Limit:  limit,
 		Active: &active,
 	})

@@ -1,15 +1,17 @@
 package main
 
 import (
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"context"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
-	polymarket "go-polymarket-sdk"
-	"go-polymarket-sdk/pkg/auth"
-	"go-polymarket-sdk/pkg/clob"
+	polymarket "github.com/GoPolymarket/polymarket-go-sdk"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob"
+	
 )
 
 func main() {
@@ -37,7 +39,7 @@ func main() {
 		Side("SELL").
 		Price(0.42).
 		Size(10).
-		OrderType(clob.OrderTypeGTD).
+		OrderType(clobtypes.OrderTypeGTD).
 		ExpirationUnix(expiration).
 		PostOnly(false).
 		BuildSignable()

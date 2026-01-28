@@ -44,13 +44,6 @@ trades, _ := authClient.TradesAll(ctx, &clob.TradesRequest{Limit: 50})
 orders, _ := authClient.OrdersAll(ctx, &clob.OrdersRequest{Limit: 50})
 ```
 
-## Contents
-
-- ARCHITECTURE.md: Layered architecture and cross-cutting concerns.
-- API_ALIGNMENT.md: Endpoint alignment table across services.
-- INTERFACES.md: Go-style method naming and interface sketch.
-- MODULES.md: Module responsibilities and feature breakdown.
-
 ## Examples
 
 - `examples/order_builder`: limit order builder (offline tick size override)

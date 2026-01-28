@@ -5,18 +5,19 @@ package clobws
 type EventType string
 
 const (
-	Orderbook      EventType = "orderbook"
-	Price          EventType = "price"
-	PriceChange    EventType = "price_change"
-	Midpoint       EventType = "midpoint"
-	LastTrade      EventType = "trade" // user trade message
-	LastTradePrice EventType = "last_trade_price"
-	TickSizeChange EventType = "tick_size_change"
-	BestBidAsk     EventType = "best_bid_ask"
-	NewMarket      EventType = "new_market"
-	MarketResolved EventType = "market_resolved"
-	UserOrders     EventType = "orders"
-	UserTrades     EventType = "trades"
+	Orderbook                EventType = "orderbook"
+	Price                    EventType = "price"
+	PriceChange              EventType = "price_change"
+	Midpoint                 EventType = "midpoint"
+	LastTrade                EventType = "trade" // user trade message
+	LastTradePrice           EventType = "last_trade_price"
+	TickSizeChange           EventType = "tick_size_change"
+	BestBidAsk               EventType = "best_bid_ask"
+	NewMarket                EventType = "new_market"
+	MarketResolved           EventType = "market_resolved"
+	UserOrders               EventType = "orders"
+	UserTrades               EventType = "trades"
+	ConnectionStateEventType EventType = "connection_state"
 )
 
 type Operation string
@@ -32,6 +33,24 @@ const (
 	ChannelMarket Channel = "market"
 	ChannelUser   Channel = "user"
 )
+
+// ConnectionState represents CLOB WS connection status.
+type ConnectionState string
+
+const (
+	ConnectionDisconnected ConnectionState = "disconnected"
+	ConnectionConnecting   ConnectionState = "connecting"
+	ConnectionConnected    ConnectionState = "connected"
+	ConnectionReconnecting ConnectionState = "reconnecting"
+)
+
+// ConnectionStateEvent captures connection transitions.
+type ConnectionStateEvent struct {
+	Channel  Channel         `json:"channel"`
+	State    ConnectionState `json:"state"`
+	Attempt  int             `json:"attempt,omitempty"`
+	Recorded int64           `json:"recorded"`
+}
 
 type AuthPayload struct {
 	APIKey     string `json:"apiKey"`

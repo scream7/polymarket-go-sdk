@@ -46,9 +46,29 @@ type clientImpl struct {
 	reconnectDelay time.Duration
 
 	subMu          sync.Mutex
-	marketAssets   map[string]struct{}
-	userMarkets    map[string]struct{}
+	marketRefs     map[string]int
+	userRefs       map[string]int
+	lastAuth       *AuthPayload
 	customFeatures bool
+	nextSubID      uint64
+
+	// Connection state
+	stateMu     sync.Mutex
+	marketState ConnectionState
+	userState   ConnectionState
+
+	// Stream subscriptions
+	orderbookSubs      map[string]*subscriptionEntry[OrderbookEvent]
+	priceSubs          map[string]*subscriptionEntry[PriceEvent]
+	midpointSubs       map[string]*subscriptionEntry[MidpointEvent]
+	lastTradeSubs      map[string]*subscriptionEntry[LastTradePriceEvent]
+	tickSizeSubs       map[string]*subscriptionEntry[TickSizeChangeEvent]
+	bestBidAskSubs     map[string]*subscriptionEntry[BestBidAskEvent]
+	newMarketSubs      map[string]*subscriptionEntry[NewMarketEvent]
+	marketResolvedSubs map[string]*subscriptionEntry[MarketResolvedEvent]
+	tradeSubs          map[string]*subscriptionEntry[TradeEvent]
+	orderSubs          map[string]*subscriptionEntry[OrderEvent]
+	stateSubs          map[string]*subscriptionEntry[ConnectionStateEvent]
 
 	// Channels
 	orderbookCh      chan OrderbookEvent
@@ -86,29 +106,42 @@ func NewClient(url string, signer auth.Signer, apiKey *auth.APIKey) (Client, err
 	}
 
 	c := &clientImpl{
-		baseURL:          baseURL,
-		marketURL:        marketURL,
-		userURL:          userURL,
-		signer:           signer,
-		apiKey:           apiKey,
-		debug:            os.Getenv("CLOB_WS_DEBUG") != "",
-		disablePing:      os.Getenv("CLOB_WS_DISABLE_PING") != "",
-		reconnect:        reconnect,
-		reconnectDelay:   reconnectDelay,
-		reconnectMax:     reconnectMax,
-		done:             make(chan struct{}),
-		marketAssets:     make(map[string]struct{}),
-		userMarkets:      make(map[string]struct{}),
-		orderbookCh:      make(chan OrderbookEvent, 100),
-		priceCh:          make(chan PriceEvent, 100),
-		midpointCh:       make(chan MidpointEvent, 100),
-		lastTradeCh:      make(chan LastTradePriceEvent, 100),
-		tickSizeCh:       make(chan TickSizeChangeEvent, 100),
-		bestBidAskCh:     make(chan BestBidAskEvent, 100),
-		newMarketCh:      make(chan NewMarketEvent, 100),
-		marketResolvedCh: make(chan MarketResolvedEvent, 100),
-		tradeCh:          make(chan TradeEvent, 100),
-		orderCh:          make(chan OrderEvent, 100),
+		baseURL:            baseURL,
+		marketURL:          marketURL,
+		userURL:            userURL,
+		signer:             signer,
+		apiKey:             apiKey,
+		debug:              os.Getenv("CLOB_WS_DEBUG") != "",
+		disablePing:        os.Getenv("CLOB_WS_DISABLE_PING") != "",
+		reconnect:          reconnect,
+		reconnectDelay:     reconnectDelay,
+		reconnectMax:       reconnectMax,
+		done:               make(chan struct{}),
+		marketRefs:         make(map[string]int),
+		userRefs:           make(map[string]int),
+		marketState:        ConnectionDisconnected,
+		userState:          ConnectionDisconnected,
+		orderbookSubs:      make(map[string]*subscriptionEntry[OrderbookEvent]),
+		priceSubs:          make(map[string]*subscriptionEntry[PriceEvent]),
+		midpointSubs:       make(map[string]*subscriptionEntry[MidpointEvent]),
+		lastTradeSubs:      make(map[string]*subscriptionEntry[LastTradePriceEvent]),
+		tickSizeSubs:       make(map[string]*subscriptionEntry[TickSizeChangeEvent]),
+		bestBidAskSubs:     make(map[string]*subscriptionEntry[BestBidAskEvent]),
+		newMarketSubs:      make(map[string]*subscriptionEntry[NewMarketEvent]),
+		marketResolvedSubs: make(map[string]*subscriptionEntry[MarketResolvedEvent]),
+		tradeSubs:          make(map[string]*subscriptionEntry[TradeEvent]),
+		orderSubs:          make(map[string]*subscriptionEntry[OrderEvent]),
+		stateSubs:          make(map[string]*subscriptionEntry[ConnectionStateEvent]),
+		orderbookCh:        make(chan OrderbookEvent, 100),
+		priceCh:            make(chan PriceEvent, 100),
+		midpointCh:         make(chan MidpointEvent, 100),
+		lastTradeCh:        make(chan LastTradePriceEvent, 100),
+		tickSizeCh:         make(chan TickSizeChangeEvent, 100),
+		bestBidAskCh:       make(chan BestBidAskEvent, 100),
+		newMarketCh:        make(chan NewMarketEvent, 100),
+		marketResolvedCh:   make(chan MarketResolvedEvent, 100),
+		tradeCh:            make(chan TradeEvent, 100),
+		orderCh:            make(chan OrderEvent, 100),
 	}
 
 	if err := c.ensureMarketConn(); err != nil {
@@ -158,9 +191,12 @@ func (c *clientImpl) ensureMarketConn() error {
 	if c.getConn(ChannelMarket) != nil {
 		return nil
 	}
+	c.setConnState(ChannelMarket, ConnectionConnecting, 0)
 	if err := c.connectMarket(); err != nil {
+		c.setConnState(ChannelMarket, ConnectionDisconnected, 0)
 		return err
 	}
+	c.setConnState(ChannelMarket, ConnectionConnected, 0)
 	go c.readLoop(ChannelMarket)
 	if !c.disablePing {
 		go c.pingLoop(ChannelMarket)
@@ -174,9 +210,12 @@ func (c *clientImpl) ensureUserConn() error {
 	if c.getConn(ChannelUser) != nil {
 		return nil
 	}
+	c.setConnState(ChannelUser, ConnectionConnecting, 0)
 	if err := c.connectUser(); err != nil {
+		c.setConnState(ChannelUser, ConnectionDisconnected, 0)
 		return err
 	}
+	c.setConnState(ChannelUser, ConnectionConnected, 0)
 	go c.readLoop(ChannelUser)
 	if !c.disablePing {
 		go c.pingLoop(ChannelUser)
@@ -247,6 +286,7 @@ func (c *clientImpl) readLoop(channel Channel) {
 				}
 			}
 			log.Printf("read error: %v", err)
+			c.setConnState(channel, ConnectionDisconnected, 0)
 			break
 		}
 
@@ -316,62 +356,41 @@ func (c *clientImpl) processEvent(raw map[string]interface{}) {
 			if len(event.Asks) == 0 && len(wire.Sells) > 0 {
 				event.Asks = wire.Sells
 			}
-			select {
-			case c.orderbookCh <- event:
-			default:
-			}
+			c.dispatchOrderbook(event)
 
 			if len(event.Bids) > 0 && len(event.Asks) > 0 {
 				bid, bidErr := decimal.NewFromString(event.Bids[0].Price)
 				ask, askErr := decimal.NewFromString(event.Asks[0].Price)
 				if bidErr == nil && askErr == nil {
 					mid := bid.Add(ask).Div(decimal.NewFromInt(2))
-					select {
-					case c.midpointCh <- MidpointEvent{AssetID: event.AssetID, Midpoint: mid.String()}:
-					default:
-					}
+					c.dispatchMidpoint(MidpointEvent{AssetID: event.AssetID, Midpoint: mid.String()})
 				}
 			}
 		}
 	case "price", "price_change":
 		var event PriceEvent
 		if err := json.Unmarshal(msgBytes, &event); err == nil {
-			select {
-			case c.priceCh <- event:
-			default:
-			}
+			c.dispatchPrice(event)
 		}
 	case "midpoint":
 		var event MidpointEvent
 		if err := json.Unmarshal(msgBytes, &event); err == nil {
-			select {
-			case c.midpointCh <- event:
-			default:
-			}
+			c.dispatchMidpoint(event)
 		}
 	case "last_trade_price":
 		var event LastTradePriceEvent
 		if err := json.Unmarshal(msgBytes, &event); err == nil {
-			select {
-			case c.lastTradeCh <- event:
-			default:
-			}
+			c.dispatchLastTrade(event)
 		}
 	case "tick_size_change":
 		var event TickSizeChangeEvent
 		if err := json.Unmarshal(msgBytes, &event); err == nil {
-			select {
-			case c.tickSizeCh <- event:
-			default:
-			}
+			c.dispatchTickSize(event)
 		}
 	case "best_bid_ask":
 		var event BestBidAskEvent
 		if err := json.Unmarshal(msgBytes, &event); err == nil {
-			select {
-			case c.bestBidAskCh <- event:
-			default:
-			}
+			c.dispatchBestBidAsk(event)
 		}
 	case "new_market":
 		var wire struct {
@@ -402,10 +421,7 @@ func (c *clientImpl) processEvent(raw map[string]interface{}) {
 				EventMessage: wire.EventMessage,
 				Timestamp:    wire.Timestamp,
 			}
-			select {
-			case c.newMarketCh <- event:
-			default:
-			}
+			c.dispatchNewMarket(event)
 		}
 	case "market_resolved":
 		var wire struct {
@@ -440,121 +456,292 @@ func (c *clientImpl) processEvent(raw map[string]interface{}) {
 				EventMessage:   wire.EventMessage,
 				Timestamp:      wire.Timestamp,
 			}
-			select {
-			case c.marketResolvedCh <- event:
-			default:
-			}
+			c.dispatchMarketResolved(event)
 		}
 	case "trade":
 		var event TradeEvent
 		if err := json.Unmarshal(msgBytes, &event); err == nil {
-			select {
-			case c.tradeCh <- event:
-			default:
-			}
+			c.dispatchTrade(event)
 		}
 	case "order":
 		var event OrderEvent
 		if err := json.Unmarshal(msgBytes, &event); err == nil {
-			select {
-			case c.orderCh <- event:
-			default:
-			}
+			c.dispatchOrder(event)
 		}
 	}
 }
 
+func trySendGlobal[T any](ch chan T, msg T) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- msg:
+	default:
+	}
+}
+
+func (c *clientImpl) dispatchOrderbook(event OrderbookEvent) {
+	trySendGlobal(c.orderbookCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.orderbookSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		if sub.matchesAsset(event.AssetID) {
+			sub.trySend(event)
+		}
+	}
+}
+
+func (c *clientImpl) dispatchPrice(event PriceEvent) {
+	trySendGlobal(c.priceCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.priceSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		if sub.matchesAsset(event.AssetID) {
+			sub.trySend(event)
+		}
+	}
+}
+
+func (c *clientImpl) dispatchMidpoint(event MidpointEvent) {
+	trySendGlobal(c.midpointCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.midpointSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		if sub.matchesAsset(event.AssetID) {
+			sub.trySend(event)
+		}
+	}
+}
+
+func (c *clientImpl) dispatchLastTrade(event LastTradePriceEvent) {
+	trySendGlobal(c.lastTradeCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.lastTradeSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		if sub.matchesAsset(event.AssetID) {
+			sub.trySend(event)
+		}
+	}
+}
+
+func (c *clientImpl) dispatchTickSize(event TickSizeChangeEvent) {
+	trySendGlobal(c.tickSizeCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.tickSizeSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		if sub.matchesAsset(event.AssetID) {
+			sub.trySend(event)
+		}
+	}
+}
+
+func (c *clientImpl) dispatchBestBidAsk(event BestBidAskEvent) {
+	trySendGlobal(c.bestBidAskCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.bestBidAskSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		if sub.matchesAsset(event.AssetID) {
+			sub.trySend(event)
+		}
+	}
+}
+
+func (c *clientImpl) dispatchNewMarket(event NewMarketEvent) {
+	trySendGlobal(c.newMarketCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.newMarketSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		if sub.matchesAnyAsset(event.AssetIDs) {
+			sub.trySend(event)
+		}
+	}
+}
+
+func (c *clientImpl) dispatchMarketResolved(event MarketResolvedEvent) {
+	trySendGlobal(c.marketResolvedCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.marketResolvedSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		if sub.matchesAnyAsset(event.AssetIDs) {
+			sub.trySend(event)
+		}
+	}
+}
+
+func (c *clientImpl) dispatchTrade(event TradeEvent) {
+	trySendGlobal(c.tradeCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.tradeSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		if event.Market != "" && !sub.matchesMarket(event.Market) {
+			continue
+		}
+		sub.trySend(event)
+	}
+}
+
+func (c *clientImpl) dispatchOrder(event OrderEvent) {
+	trySendGlobal(c.orderCh, event)
+	c.subMu.Lock()
+	subs := snapshotSubs(c.orderSubs)
+	c.subMu.Unlock()
+	for _, sub := range subs {
+		sub.trySend(event)
+	}
+}
+
+func (c *clientImpl) SubscribeOrderbookStream(ctx context.Context, assetIDs []string) (*Stream[OrderbookEvent], error) {
+	return subscribeMarketStream(c, ctx, assetIDs, Orderbook, false, c.orderbookSubs)
+}
+
+func (c *clientImpl) SubscribePricesStream(ctx context.Context, assetIDs []string) (*Stream[PriceEvent], error) {
+	return subscribeMarketStream(c, ctx, assetIDs, PriceChange, false, c.priceSubs)
+}
+
+func (c *clientImpl) SubscribeMidpointsStream(ctx context.Context, assetIDs []string) (*Stream[MidpointEvent], error) {
+	return subscribeMarketStream(c, ctx, assetIDs, Midpoint, false, c.midpointSubs)
+}
+
+func (c *clientImpl) SubscribeLastTradePricesStream(ctx context.Context, assetIDs []string) (*Stream[LastTradePriceEvent], error) {
+	return subscribeMarketStream(c, ctx, assetIDs, LastTradePrice, false, c.lastTradeSubs)
+}
+
+func (c *clientImpl) SubscribeTickSizeChangesStream(ctx context.Context, assetIDs []string) (*Stream[TickSizeChangeEvent], error) {
+	return subscribeMarketStream(c, ctx, assetIDs, TickSizeChange, false, c.tickSizeSubs)
+}
+
+func (c *clientImpl) SubscribeBestBidAskStream(ctx context.Context, assetIDs []string) (*Stream[BestBidAskEvent], error) {
+	return subscribeMarketStream(c, ctx, assetIDs, BestBidAsk, true, c.bestBidAskSubs)
+}
+
+func (c *clientImpl) SubscribeNewMarketsStream(ctx context.Context, assetIDs []string) (*Stream[NewMarketEvent], error) {
+	return subscribeMarketStream(c, ctx, assetIDs, NewMarket, true, c.newMarketSubs)
+}
+
+func (c *clientImpl) SubscribeMarketResolutionsStream(ctx context.Context, assetIDs []string) (*Stream[MarketResolvedEvent], error) {
+	return subscribeMarketStream(c, ctx, assetIDs, MarketResolved, true, c.marketResolvedSubs)
+}
+
+func (c *clientImpl) SubscribeOrdersStream(ctx context.Context) (*Stream[OrderEvent], error) {
+	return nil, errors.New("markets required: use SubscribeUserOrdersStream")
+}
+
+func (c *clientImpl) SubscribeTradesStream(ctx context.Context) (*Stream[TradeEvent], error) {
+	return nil, errors.New("markets required: use SubscribeUserTradesStream")
+}
+
+func (c *clientImpl) SubscribeUserOrdersStream(ctx context.Context, markets []string) (*Stream[OrderEvent], error) {
+	return subscribeUserStream(c, ctx, markets, UserOrders, c.orderSubs)
+}
+
+func (c *clientImpl) SubscribeUserTradesStream(ctx context.Context, markets []string) (*Stream[TradeEvent], error) {
+	return subscribeUserStream(c, ctx, markets, UserTrades, c.tradeSubs)
+}
+
 func (c *clientImpl) SubscribeOrderbook(ctx context.Context, assetIDs []string) (<-chan OrderbookEvent, error) {
-	if err := c.subscribeMarketAssets(assetIDs); err != nil {
+	stream, err := c.SubscribeOrderbookStream(ctx, assetIDs)
+	if err != nil {
 		return nil, err
 	}
-	return c.orderbookCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribePrices(ctx context.Context, assetIDs []string) (<-chan PriceEvent, error) {
-	if err := c.subscribeMarketAssets(assetIDs); err != nil {
+	stream, err := c.SubscribePricesStream(ctx, assetIDs)
+	if err != nil {
 		return nil, err
 	}
-	return c.priceCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeMidpoints(ctx context.Context, assetIDs []string) (<-chan MidpointEvent, error) {
-	if err := c.subscribeMarketAssets(assetIDs); err != nil {
+	stream, err := c.SubscribeMidpointsStream(ctx, assetIDs)
+	if err != nil {
 		return nil, err
 	}
-	return c.midpointCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeLastTradePrices(ctx context.Context, assetIDs []string) (<-chan LastTradePriceEvent, error) {
-	if err := c.subscribeMarketAssets(assetIDs); err != nil {
+	stream, err := c.SubscribeLastTradePricesStream(ctx, assetIDs)
+	if err != nil {
 		return nil, err
 	}
-	return c.lastTradeCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeTickSizeChanges(ctx context.Context, assetIDs []string) (<-chan TickSizeChangeEvent, error) {
-	if err := c.subscribeMarketAssets(assetIDs); err != nil {
+	stream, err := c.SubscribeTickSizeChangesStream(ctx, assetIDs)
+	if err != nil {
 		return nil, err
 	}
-	return c.tickSizeCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeBestBidAsk(ctx context.Context, assetIDs []string) (<-chan BestBidAskEvent, error) {
-	req := NewMarketSubscription(assetIDs)
-	if req == nil {
-		return nil, errors.New("assetIDs required")
-	}
-	req.WithCustomFeatures(true)
-	if err := c.Subscribe(ctx, req); err != nil {
+	stream, err := c.SubscribeBestBidAskStream(ctx, assetIDs)
+	if err != nil {
 		return nil, err
 	}
-	return c.bestBidAskCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeNewMarkets(ctx context.Context, assetIDs []string) (<-chan NewMarketEvent, error) {
-	req := NewMarketSubscription(assetIDs)
-	if req == nil {
-		return nil, errors.New("assetIDs required")
-	}
-	req.WithCustomFeatures(true)
-	if err := c.Subscribe(ctx, req); err != nil {
+	stream, err := c.SubscribeNewMarketsStream(ctx, assetIDs)
+	if err != nil {
 		return nil, err
 	}
-	return c.newMarketCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeMarketResolutions(ctx context.Context, assetIDs []string) (<-chan MarketResolvedEvent, error) {
-	req := NewMarketSubscription(assetIDs)
-	if req == nil {
-		return nil, errors.New("assetIDs required")
-	}
-	req.WithCustomFeatures(true)
-	if err := c.Subscribe(ctx, req); err != nil {
+	stream, err := c.SubscribeMarketResolutionsStream(ctx, assetIDs)
+	if err != nil {
 		return nil, err
 	}
-	return c.marketResolvedCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeOrders(ctx context.Context) (<-chan OrderEvent, error) {
-	return nil, errors.New("markets required: use SubscribeUserOrders")
+	stream, err := c.SubscribeOrdersStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeTrades(ctx context.Context) (<-chan TradeEvent, error) {
-	return nil, errors.New("markets required: use SubscribeUserTrades")
+	stream, err := c.SubscribeTradesStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeUserOrders(ctx context.Context, markets []string) (<-chan OrderEvent, error) {
-	if err := c.Subscribe(ctx, NewUserSubscription(markets)); err != nil {
+	stream, err := c.SubscribeUserOrdersStream(ctx, markets)
+	if err != nil {
 		return nil, err
 	}
-	return c.orderCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) SubscribeUserTrades(ctx context.Context, markets []string) (<-chan TradeEvent, error) {
-	if err := c.Subscribe(ctx, NewUserSubscription(markets)); err != nil {
+	stream, err := c.SubscribeUserTradesStream(ctx, markets)
+	if err != nil {
 		return nil, err
 	}
-	return c.tradeCh, nil
+	return stream.C, nil
 }
 
 func (c *clientImpl) Subscribe(ctx context.Context, req *SubscriptionRequest) error {
@@ -606,12 +793,6 @@ func (c *clientImpl) applySubscription(req *SubscriptionRequest, defaultOp Opera
 		if len(req.Markets) == 0 {
 			return errors.New("markets required")
 		}
-		if req.Auth == nil {
-			req.Auth = c.authPayload()
-		}
-		if req.Auth == nil {
-			return errors.New("user subscription requires API key credentials")
-		}
 	default:
 		return errors.New("unknown subscription channel")
 	}
@@ -619,11 +800,69 @@ func (c *clientImpl) applySubscription(req *SubscriptionRequest, defaultOp Opera
 	if req.Operation == "" {
 		req.Operation = defaultOp
 	}
-	c.trackSubscription(req)
-	if err := c.ensureConn(req.Type); err != nil {
-		return err
+	switch req.Type {
+	case ChannelMarket:
+		custom := req.CustomFeatureEnabled != nil && *req.CustomFeatureEnabled
+		switch req.Operation {
+		case OperationSubscribe:
+			newAssets := c.addMarketRefs(req.AssetIDs, custom)
+			if err := c.ensureConn(ChannelMarket); err != nil {
+				return err
+			}
+			if len(newAssets) == 0 {
+				return nil
+			}
+			subReq := NewMarketSubscription(newAssets)
+			if custom {
+				subReq.WithCustomFeatures(true)
+			}
+			return c.writeJSON(ChannelMarket, subReq)
+		case OperationUnsubscribe:
+			toUnsub := c.removeMarketRefs(req.AssetIDs)
+			if len(toUnsub) == 0 {
+				return nil
+			}
+			if err := c.ensureConn(ChannelMarket); err != nil {
+				return err
+			}
+			return c.writeJSON(ChannelMarket, NewMarketUnsubscribe(toUnsub))
+		default:
+			return errors.New("unknown subscription operation")
+		}
+	case ChannelUser:
+		auth := c.resolveAuth(req.Auth)
+		if auth == nil {
+			return errors.New("user subscription requires API key credentials")
+		}
+		switch req.Operation {
+		case OperationSubscribe:
+			newMarkets := c.addUserRefs(req.Markets, auth)
+			if err := c.ensureConn(ChannelUser); err != nil {
+				return err
+			}
+			if len(newMarkets) == 0 {
+				return nil
+			}
+			subReq := NewUserSubscription(newMarkets)
+			subReq.Auth = auth
+			return c.writeJSON(ChannelUser, subReq)
+		case OperationUnsubscribe:
+			toUnsub := c.removeUserRefs(req.Markets)
+			if len(toUnsub) == 0 {
+				return nil
+			}
+			if err := c.ensureConn(ChannelUser); err != nil {
+				return err
+			}
+			unsubReq := NewUserUnsubscribe(toUnsub)
+			unsubReq.Auth = auth
+			return c.writeJSON(ChannelUser, unsubReq)
+		default:
+			return errors.New("unknown subscription operation")
+		}
+	default:
+		return errors.New("unknown subscription channel")
 	}
-	return c.writeJSON(req.Type, req)
 }
 
 func (c *clientImpl) Close() error {
@@ -631,6 +870,9 @@ func (c *clientImpl) Close() error {
 	c.cleanupSubscriptions()
 	c.closeConn(ChannelMarket)
 	c.closeConn(ChannelUser)
+	c.setConnState(ChannelMarket, ConnectionDisconnected, 0)
+	c.setConnState(ChannelUser, ConnectionDisconnected, 0)
+	c.closeAllStreams()
 	c.shutdown()
 	return nil
 }
@@ -673,12 +915,153 @@ func (c *clientImpl) writeMessage(channel Channel, payload []byte) error {
 	}
 }
 
-func (c *clientImpl) subscribeMarketAssets(assetIDs []string) error {
-	req := NewMarketSubscription(assetIDs)
-	if req == nil {
-		return errors.New("assetIDs required")
+func subscribeMarketStream[T any](c *clientImpl, ctx context.Context, assetIDs []string, eventType EventType, custom bool, subs map[string]*subscriptionEntry[T]) (*Stream[T], error) {
+	if len(assetIDs) == 0 {
+		return nil, errors.New("assetIDs required")
 	}
-	return c.Subscribe(context.Background(), req)
+	newAssets := c.addMarketRefs(assetIDs, custom)
+	if err := c.ensureConn(ChannelMarket); err != nil {
+		return nil, err
+	}
+	if len(newAssets) > 0 {
+		req := NewMarketSubscription(newAssets)
+		if custom {
+			req.WithCustomFeatures(true)
+		}
+		if err := c.writeJSON(ChannelMarket, req); err != nil {
+			return nil, err
+		}
+	}
+
+	entry := newSubscriptionEntry[T](c, ChannelMarket, eventType, assetIDs, nil)
+	c.subMu.Lock()
+	subs[entry.id] = entry
+	c.subMu.Unlock()
+
+	stream := &Stream[T]{
+		C:   entry.ch,
+		Err: entry.errCh,
+		closeF: func() error {
+			closeMarketStream(c, entry, assetIDs, subs)
+			return nil
+		},
+	}
+	bindContext(ctx, stream)
+	return stream, nil
+}
+
+func subscribeUserStream[T any](c *clientImpl, ctx context.Context, markets []string, eventType EventType, subs map[string]*subscriptionEntry[T]) (*Stream[T], error) {
+	if len(markets) == 0 {
+		return nil, errors.New("markets required")
+	}
+	auth := c.resolveAuth(nil)
+	if auth == nil {
+		return nil, errors.New("user subscription requires API key credentials")
+	}
+	newMarkets := c.addUserRefs(markets, auth)
+	if err := c.ensureConn(ChannelUser); err != nil {
+		return nil, err
+	}
+	if len(newMarkets) > 0 {
+		req := NewUserSubscription(newMarkets)
+		req.Auth = auth
+		if err := c.writeJSON(ChannelUser, req); err != nil {
+			return nil, err
+		}
+	}
+
+	entry := newSubscriptionEntry[T](c, ChannelUser, eventType, nil, markets)
+	c.subMu.Lock()
+	subs[entry.id] = entry
+	c.subMu.Unlock()
+
+	stream := &Stream[T]{
+		C:   entry.ch,
+		Err: entry.errCh,
+		closeF: func() error {
+			closeUserStream(c, entry, markets, subs)
+			return nil
+		},
+	}
+	bindContext(ctx, stream)
+	return stream, nil
+}
+
+func bindContext[T any](ctx context.Context, stream *Stream[T]) {
+	if ctx == nil || stream == nil {
+		return
+	}
+	done := ctx.Done()
+	if done == nil {
+		return
+	}
+	go func() {
+		select {
+		case <-done:
+			_ = stream.Close()
+		}
+	}()
+}
+
+func newSubscriptionEntry[T any](c *clientImpl, channel Channel, eventType EventType, assets []string, markets []string) *subscriptionEntry[T] {
+	id := atomic.AddUint64(&c.nextSubID, 1)
+	return &subscriptionEntry[T]{
+		id:      strconv.FormatUint(id, 10),
+		channel: channel,
+		event:   eventType,
+		assets:  makeIDSet(assets),
+		markets: makeIDSet(markets),
+		ch:      make(chan T, defaultStreamBuffer),
+		errCh:   make(chan error, defaultErrBuffer),
+	}
+}
+
+func closeMarketStream[T any](c *clientImpl, entry *subscriptionEntry[T], assetIDs []string, subs map[string]*subscriptionEntry[T]) {
+	if entry == nil {
+		return
+	}
+	if !entry.close() {
+		return
+	}
+	c.subMu.Lock()
+	delete(subs, entry.id)
+	c.subMu.Unlock()
+
+	toUnsub := c.removeMarketRefs(assetIDs)
+	if len(toUnsub) == 0 {
+		return
+	}
+	if c.getConn(ChannelMarket) == nil {
+		return
+	}
+	_ = c.writeJSON(ChannelMarket, NewMarketUnsubscribe(toUnsub))
+}
+
+func closeUserStream[T any](c *clientImpl, entry *subscriptionEntry[T], markets []string, subs map[string]*subscriptionEntry[T]) {
+	if entry == nil {
+		return
+	}
+	if !entry.close() {
+		return
+	}
+	c.subMu.Lock()
+	delete(subs, entry.id)
+	c.subMu.Unlock()
+
+	toUnsub := c.removeUserRefs(markets)
+	if len(toUnsub) == 0 {
+		return
+	}
+	if c.getConn(ChannelUser) == nil {
+		return
+	}
+	auth := c.resolveAuth(nil)
+	if auth == nil {
+		return
+	}
+	req := NewUserUnsubscribe(toUnsub)
+	req.Auth = auth
+	_ = c.writeJSON(ChannelUser, req)
 }
 
 func (c *clientImpl) authPayload() *AuthPayload {
@@ -695,6 +1078,141 @@ func (c *clientImpl) authPayload() *AuthPayload {
 	}
 }
 
+func (c *clientImpl) resolveAuth(explicit *AuthPayload) *AuthPayload {
+	if explicit != nil {
+		copy := *explicit
+		return &copy
+	}
+	if auth := c.authPayload(); auth != nil {
+		return auth
+	}
+	return c.getLastAuth()
+}
+
+func (c *clientImpl) setLastAuth(auth *AuthPayload) {
+	if auth == nil {
+		return
+	}
+	copy := *auth
+	c.lastAuth = &copy
+}
+
+func (c *clientImpl) getLastAuth() *AuthPayload {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	if c.lastAuth == nil {
+		return nil
+	}
+	copy := *c.lastAuth
+	return &copy
+}
+
+func (c *clientImpl) addMarketRefs(assetIDs []string, custom bool) []string {
+	if len(assetIDs) == 0 {
+		return nil
+	}
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	if custom {
+		c.customFeatures = true
+	}
+	newAssets := make([]string, 0, len(assetIDs))
+	for _, id := range assetIDs {
+		if id == "" {
+			continue
+		}
+		if c.marketRefs[id] == 0 {
+			newAssets = append(newAssets, id)
+		}
+		c.marketRefs[id]++
+	}
+	return newAssets
+}
+
+func (c *clientImpl) removeMarketRefs(assetIDs []string) []string {
+	if len(assetIDs) == 0 {
+		return nil
+	}
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	toUnsub := make([]string, 0, len(assetIDs))
+	for _, id := range assetIDs {
+		count := c.marketRefs[id]
+		if count <= 1 {
+			if count > 0 {
+				delete(c.marketRefs, id)
+				toUnsub = append(toUnsub, id)
+			}
+			continue
+		}
+		c.marketRefs[id] = count - 1
+	}
+	return toUnsub
+}
+
+func (c *clientImpl) addUserRefs(markets []string, auth *AuthPayload) []string {
+	if len(markets) == 0 {
+		return nil
+	}
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	if auth != nil {
+		copy := *auth
+		c.lastAuth = &copy
+	}
+	newMarkets := make([]string, 0, len(markets))
+	for _, id := range markets {
+		if id == "" {
+			continue
+		}
+		if c.userRefs[id] == 0 {
+			newMarkets = append(newMarkets, id)
+		}
+		c.userRefs[id]++
+	}
+	return newMarkets
+}
+
+func (c *clientImpl) removeUserRefs(markets []string) []string {
+	if len(markets) == 0 {
+		return nil
+	}
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	toUnsub := make([]string, 0, len(markets))
+	for _, id := range markets {
+		count := c.userRefs[id]
+		if count <= 1 {
+			if count > 0 {
+				delete(c.userRefs, id)
+				toUnsub = append(toUnsub, id)
+			}
+			continue
+		}
+		c.userRefs[id] = count - 1
+	}
+	return toUnsub
+}
+
+func (c *clientImpl) snapshotSubscriptionRefs() ([]string, []string, bool, *AuthPayload) {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	assets := make([]string, 0, len(c.marketRefs))
+	for id := range c.marketRefs {
+		assets = append(assets, id)
+	}
+	markets := make([]string, 0, len(c.userRefs))
+	for id := range c.userRefs {
+		markets = append(markets, id)
+	}
+	var authCopy *AuthPayload
+	if c.lastAuth != nil {
+		copy := *c.lastAuth
+		authCopy = &copy
+	}
+	return assets, markets, c.customFeatures, authCopy
+}
+
 func (c *clientImpl) reconnectLoop(channel Channel) error {
 	var lastErr error
 	delay := c.reconnectDelay
@@ -706,6 +1224,7 @@ func (c *clientImpl) reconnectLoop(channel Channel) error {
 		if c.debug {
 			log.Printf("ws reconnect attempt %d in %s (%s)", attempt+1, delay, channel)
 		}
+		c.setConnState(channel, ConnectionReconnecting, attempt+1)
 		time.Sleep(delay)
 		c.closeConn(channel)
 		var err error
@@ -721,6 +1240,7 @@ func (c *clientImpl) reconnectLoop(channel Channel) error {
 			if c.debug {
 				log.Printf("ws reconnect success")
 			}
+			c.setConnState(channel, ConnectionConnected, 0)
 			c.resubscribe(channel)
 			return nil
 		}
@@ -732,11 +1252,12 @@ func (c *clientImpl) reconnectLoop(channel Channel) error {
 			delay *= 2
 		}
 	}
+	c.setConnState(channel, ConnectionDisconnected, 0)
 	return lastErr
 }
 
 func (c *clientImpl) resubscribe(channel Channel) {
-	assets, markets, custom := c.snapshotSubscriptions()
+	assets, markets, custom, auth := c.snapshotSubscriptionRefs()
 	switch channel {
 	case ChannelMarket:
 		if len(assets) == 0 {
@@ -746,61 +1267,20 @@ func (c *clientImpl) resubscribe(channel Channel) {
 		if custom {
 			req.WithCustomFeatures(true)
 		}
-		_ = c.Subscribe(context.Background(), req)
+		_ = c.writeJSON(ChannelMarket, req)
 	case ChannelUser:
-		if len(markets) == 0 {
+		if len(markets) == 0 || auth == nil {
 			return
 		}
-		_ = c.Subscribe(context.Background(), NewUserSubscription(markets))
-	}
-}
-
-func (c *clientImpl) snapshotSubscriptions() ([]string, []string, bool) {
-	c.subMu.Lock()
-	defer c.subMu.Unlock()
-	assets := make([]string, 0, len(c.marketAssets))
-	for id := range c.marketAssets {
-		assets = append(assets, id)
-	}
-	markets := make([]string, 0, len(c.userMarkets))
-	for id := range c.userMarkets {
-		markets = append(markets, id)
-	}
-	return assets, markets, c.customFeatures
-}
-
-func (c *clientImpl) trackSubscription(req *SubscriptionRequest) {
-	if req == nil {
-		return
-	}
-	c.subMu.Lock()
-	defer c.subMu.Unlock()
-
-	switch req.Type {
-	case ChannelMarket:
-		for _, id := range req.AssetIDs {
-			if req.Operation == OperationUnsubscribe {
-				delete(c.marketAssets, id)
-			} else {
-				c.marketAssets[id] = struct{}{}
-			}
-		}
-	case ChannelUser:
-		for _, id := range req.Markets {
-			if req.Operation == OperationUnsubscribe {
-				delete(c.userMarkets, id)
-			} else {
-				c.userMarkets[id] = struct{}{}
-			}
-		}
-	}
-	if req.CustomFeatureEnabled != nil && *req.CustomFeatureEnabled {
-		c.customFeatures = true
+		req := NewUserSubscription(markets)
+		req.Auth = auth
+		_ = c.writeJSON(ChannelUser, req)
 	}
 }
 
 func (c *clientImpl) shutdown() {
 	c.closeOnce.Do(func() {
+		c.closeAllStreams()
 		close(c.done)
 		close(c.orderbookCh)
 		close(c.priceCh)
@@ -816,18 +1296,40 @@ func (c *clientImpl) shutdown() {
 }
 
 func (c *clientImpl) cleanupSubscriptions() {
-	assets, markets, _ := c.snapshotSubscriptions()
+	assets, markets, _, auth := c.snapshotSubscriptionRefs()
 	if len(assets) > 0 && c.getConn(ChannelMarket) != nil {
 		req := NewMarketUnsubscribe(assets)
 		_ = c.writeJSON(ChannelMarket, req)
 	}
 	if len(markets) > 0 && c.getConn(ChannelUser) != nil {
-		req := NewUserUnsubscribe(markets)
-		if req.Auth == nil {
-			req.Auth = c.authPayload()
+		if auth == nil {
+			auth = c.authPayload()
 		}
-		_ = c.writeJSON(ChannelUser, req)
+		if auth != nil {
+			req := NewUserUnsubscribe(markets)
+			req.Auth = auth
+			_ = c.writeJSON(ChannelUser, req)
+		}
 	}
+}
+
+func (c *clientImpl) closeAllStreams() {
+	c.subMu.Lock()
+	closeSubMap(c.orderbookSubs)
+	closeSubMap(c.priceSubs)
+	closeSubMap(c.midpointSubs)
+	closeSubMap(c.lastTradeSubs)
+	closeSubMap(c.tickSizeSubs)
+	closeSubMap(c.bestBidAskSubs)
+	closeSubMap(c.newMarketSubs)
+	closeSubMap(c.marketResolvedSubs)
+	closeSubMap(c.tradeSubs)
+	closeSubMap(c.orderSubs)
+	c.subMu.Unlock()
+
+	c.stateMu.Lock()
+	closeSubMap(c.stateSubs)
+	c.stateMu.Unlock()
 }
 
 func (c *clientImpl) getConn(channel Channel) *websocket.Conn {
@@ -861,5 +1363,84 @@ func (c *clientImpl) closeConn(channel Channel) {
 	conn := c.getConn(channel)
 	if conn != nil {
 		_ = conn.Close()
+	}
+}
+
+func (c *clientImpl) ConnectionState(channel Channel) ConnectionState {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	switch channel {
+	case ChannelMarket:
+		if c.marketState == "" {
+			return ConnectionDisconnected
+		}
+		return c.marketState
+	case ChannelUser:
+		if c.userState == "" {
+			return ConnectionDisconnected
+		}
+		return c.userState
+	default:
+		return ConnectionDisconnected
+	}
+}
+
+func (c *clientImpl) ConnectionStateStream(ctx context.Context) (*Stream[ConnectionStateEvent], error) {
+	entry := newSubscriptionEntry[ConnectionStateEvent](c, ChannelMarket, ConnectionStateEventType, nil, nil)
+	c.stateMu.Lock()
+	c.stateSubs[entry.id] = entry
+	market := c.marketState
+	user := c.userState
+	c.stateMu.Unlock()
+
+	stream := &Stream[ConnectionStateEvent]{
+		C:   entry.ch,
+		Err: entry.errCh,
+		closeF: func() error {
+			if entry.close() {
+				c.stateMu.Lock()
+				delete(c.stateSubs, entry.id)
+				c.stateMu.Unlock()
+			}
+			return nil
+		},
+	}
+	bindContext(ctx, stream)
+	entry.trySend(ConnectionStateEvent{
+		Channel:  ChannelMarket,
+		State:    market,
+		Recorded: time.Now().UnixMilli(),
+	})
+	entry.trySend(ConnectionStateEvent{
+		Channel:  ChannelUser,
+		State:    user,
+		Recorded: time.Now().UnixMilli(),
+	})
+	return stream, nil
+}
+
+func (c *clientImpl) setConnState(channel Channel, state ConnectionState, attempt int) {
+	event := ConnectionStateEvent{
+		Channel:  channel,
+		State:    state,
+		Attempt:  attempt,
+		Recorded: time.Now().UnixMilli(),
+	}
+
+	c.stateMu.Lock()
+	switch channel {
+	case ChannelMarket:
+		c.marketState = state
+	case ChannelUser:
+		c.userState = state
+	default:
+		c.stateMu.Unlock()
+		return
+	}
+	subs := snapshotSubs(c.stateSubs)
+	c.stateMu.Unlock()
+
+	for _, sub := range subs {
+		sub.trySend(event)
 	}
 }

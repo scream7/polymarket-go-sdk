@@ -109,6 +109,10 @@ type clientImpl struct {
 	reconnectDelay time.Duration
 	reconnectMax   int
 
+	stateMu     sync.Mutex
+	stateSubs   map[string]*stateSubscription
+	nextStateID uint64
+
 	subMu      sync.Mutex
 	subRefs    map[string]int
 	subDetails map[string]Subscription
@@ -142,6 +146,7 @@ func NewClient(url string) (Client, error) {
 	c := &clientImpl{
 		url:            url,
 		done:           make(chan struct{}),
+		stateSubs:      make(map[string]*stateSubscription),
 		subRefs:        make(map[string]int),
 		subDetails:     make(map[string]Subscription),
 		subs:           make(map[string]*subscriptionEntry),
@@ -161,11 +166,11 @@ func (c *clientImpl) connect() error {
 	c.closeConn()
 	conn, _, err := websocket.DefaultDialer.Dial(c.url, nil)
 	if err != nil {
-		atomic.StoreInt32(&c.state, connDisconnected)
+		c.setState(ConnectionDisconnected)
 		return err
 	}
 	c.conn = conn
-	atomic.StoreInt32(&c.state, connConnected)
+	c.setState(ConnectionConnected)
 	return nil
 }
 
@@ -232,7 +237,7 @@ func (c *clientImpl) pingLoop() {
 			err := c.conn.WriteMessage(websocket.TextMessage, []byte("PING"))
 			c.mu.Unlock()
 			if err != nil {
-				atomic.StoreInt32(&c.state, connDisconnected)
+				c.setState(ConnectionDisconnected)
 				continue
 			}
 		}
@@ -244,7 +249,7 @@ func (c *clientImpl) readLoop() error {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			log.Printf("rtds read error: %v", err)
-			atomic.StoreInt32(&c.state, connDisconnected)
+			c.setState(ConnectionDisconnected)
 			return err
 		}
 
@@ -454,9 +459,10 @@ func (c *clientImpl) SubscriptionCount() int {
 
 func (c *clientImpl) Close() error {
 	c.closing.Store(true)
-	atomic.StoreInt32(&c.state, connDisconnected)
+	c.setState(ConnectionDisconnected)
 	c.closeConn()
 	c.closeAllSubscriptions()
+	c.closeStateSubscriptions()
 	c.signalDone()
 	return nil
 }

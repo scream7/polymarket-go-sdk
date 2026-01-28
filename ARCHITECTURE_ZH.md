@@ -15,7 +15,7 @@
 
 2）传输层
 - HTTP：封装 `http.Client`，统一处理 Request 构建、JSON 编解码、错误解析 (`APIError`)。
-- WebSocket：重连、退避、订阅管理 (TODO)。
+- WebSocket：重连、退避、订阅恢复与心跳（RTDS 提供 per‑sub stream，CLOB WS 覆盖市场/用户双通道）。
 
 3）认证层
 - **Signer 接口**：抽象 EIP-712 签名能力。
@@ -26,12 +26,12 @@
 - **clob**：核心交易模块。
   - **WithAuth**：链式调用注入认证信息，区分只读/交易上下文。
   - **CreateOrder**：自动构建 EIP-712 Typed Data -> 签名 -> 发送交易。
-- clobws：CLOB WebSocket 市场/用户流 (TODO)
-- rtds：RTDS WebSocket 实时流 (TODO)
-- gamma：市场发现 (TODO)
-- data：只读数据分析 (TODO)
-- bridge：跨链入金与支持资产 (TODO)
-- ctf：链上拆分/合并/赎回 (TODO)
+- clobws：CLOB WebSocket 市场/用户流，支持重连与订阅恢复。
+- rtds：RTDS WebSocket 实时流，支持 per‑sub stream 与 lag 通知。
+- gamma：市场发现 API 客户端。
+- data：只读数据分析 API 客户端。
+- bridge：Bridge API（入金地址/支持资产/状态）与 EVM 转账式入金/提现（跨链提现流程需额外配置）。
+- ctf：链上拆分/合并/赎回/PrepareCondition 与 ID 计算。
 
 5）共享类型 (`types` 包)
 - **Decimal**：使用 `github.com/shopspring/decimal` 替代 `float64`，确保金额/价格精度。

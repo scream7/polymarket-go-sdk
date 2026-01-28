@@ -17,6 +17,7 @@ type Client interface {
 	UnsubscribeComments(ctx context.Context, commentType *CommentType) error
 	UnsubscribeRaw(ctx context.Context, sub *Subscription) error
 	ConnectionState() ConnectionState
+	ConnectionStateStream(ctx context.Context) (*Stream[ConnectionStateEvent], error)
 	SubscriptionCount() int
 	Close() error
 }

@@ -16,6 +16,12 @@ const (
 	ConnectionConnected    ConnectionState = "connected"
 )
 
+// ConnectionStateEvent captures connection transitions.
+type ConnectionStateEvent struct {
+	State    ConnectionState `json:"state"`
+	Recorded int64           `json:"recorded"`
+}
+
 // RtdsMessage is the raw RTDS message wrapper.
 type RtdsMessage struct {
 	Topic     string          `json:"topic"`

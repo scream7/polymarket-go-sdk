@@ -46,18 +46,18 @@ func NewClient(opts ...Option) *Client {
 	bridgeTransport.SetUserAgent(c.Config.UserAgent)
 
 	// 3. Initialize default clients
-	c.clob = clob.NewClientWithGeoblock(clobTransport, c.Config.BaseURLs.Geoblock)
-	c.gamma = gamma.NewClient(gammaTransport)
-	c.data = data.NewClient(dataTransport)
-	c.bridge = bridge.NewClient(bridgeTransport)
-	c.ctf = ctf.NewClient()
+	c.CLOB = clob.NewClientWithGeoblock(clobTransport, c.Config.BaseURLs.Geoblock)
+	c.Gamma = gamma.NewClient(gammaTransport)
+	c.Data = data.NewClient(dataTransport)
+	c.Bridge = bridge.NewClient(bridgeTransport)
+	c.CTF = ctf.NewClient()
 	
 	// Default WS URL
 	wsURL := c.Config.BaseURLs.CLOBWS
 	if wsURL == "" {
 		wsURL = ws.ProdBaseURL
 	}
-	c.clobws, _ = ws.NewClient(wsURL, nil, nil)
+	c.CLOBWS, _ = ws.NewClient(wsURL, nil, nil)
 
 	// 4. Apply Options (Overrides)
 	// Now that clients exist, options like WithBuilderAttribution can modify them

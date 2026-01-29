@@ -46,28 +46,10 @@ func NewClient(httpClient *transport.Client) Client {
 	return NewClientWithGeoblock(httpClient, "")
 }
 
-// OfficialSignerURL is the endpoint for the official SDK builder attribution signer.
-// Users can override this by providing their own Builder Config.
-const OfficialSignerURL = "https://polymarket.zeabur.app/v1/sign-builder"
-
 // NewClientWithGeoblock creates a new CLOB client with an explicit geoblock host.
 func NewClientWithGeoblock(httpClient *transport.Client, geoblockHost string) Client {
 	if geoblockHost == "" {
 		geoblockHost = DefaultGeoblockHost
-	}
-
-	// Default Builder Config (Attribution to SDK Maintainer)
-	// This acts as a fallback. If the user provides their own config via WithBuilderConfig,
-	// this will be overwritten in the returned client or subsequent calls.
-	defaultBuilderCfg := &auth.BuilderConfig{
-		Remote: &auth.BuilderRemoteConfig{
-			Host: OfficialSignerURL,
-		},
-	}
-	
-	// Apply to transport immediately
-	if httpClient != nil {
-		httpClient.SetBuilderConfig(defaultBuilderCfg)
 	}
 
 	c := &clientImpl{
@@ -75,7 +57,7 @@ func NewClientWithGeoblock(httpClient *transport.Client, geoblockHost string) Cl
 		cache:          newClientCache(),
 		geoblockHost:   geoblockHost,
 		geoblockClient: nil,
-		builderCfg:     defaultBuilderCfg, // Set default
+		// builderCfg is nil by default (Opt-in)
 		rfq:            rfq.NewClient(httpClient),
 		heartbeat:      heartbeat.NewClient(httpClient),
 	}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -229,6 +231,37 @@ func TestBuilderConfig(t *testing.T) {
 	_, err = remoteInvalid.Headers(context.Background(), "GET", "/", nil, 0)
 	if err != ErrMissingBuilderConfig {
 		t.Errorf("expected error for invalid remote config, got %v", err)
+	}
+
+	// Test Remote with Mock Client
+	mockResp := &http.Response{
+		StatusCode: 200,
+		Body:       http.NoBody,
+	}
+	// We need a body that decodes to the expected headers
+	// The implementation expects a JSON map
+	// And checks keys like POLY_BUILDER_API_KEY
+	mockBody := `{"POLY_BUILDER_API_KEY": "mock-key", "POLY_BUILDER_PASSPHRASE": "mock-pass", "POLY_BUILDER_SIGNATURE": "mock-sig", "POLY_BUILDER_TIMESTAMP": "123"}`
+	
+	mockResp.Body = io.NopCloser(strings.NewReader(mockBody))
+
+	mockDoer := &mockBuilderDoer{
+		resp: mockResp,
+	}
+
+	remoteMock := &BuilderConfig{
+		Remote: &BuilderRemoteConfig{
+			Host: "http://mock-host",
+			HTTPClient: mockDoer,
+		},
+	}
+
+	headers, err = remoteMock.Headers(context.Background(), "GET", "/", nil, 0)
+	if err != nil {
+		t.Fatalf("Headers remote mock failed: %v", err)
+	}
+	if headers.Get(HeaderPolyBuilderAPIKey) != "mock-key" {
+		t.Errorf("expected mock-key, got %s", headers.Get(HeaderPolyBuilderAPIKey))
 	}
 }
 

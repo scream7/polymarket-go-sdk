@@ -19,46 +19,31 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-          cache: false # golangci-lint has its own caching handling
-      
+          cache: false
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v1.63.4
           args: --timeout=5m
 
   test:
     name: Build & Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.23', '1.24']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.24'
           cache: true
-
       - name: Install dependencies
         run: go mod download
-
       - name: Build
         run: go build -v ./...
-
       - name: Test with Race Detector
         run: go test -v -race -coverprofile=coverage.out ./...
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3
-        with:
-          version: v1.54
-          args: --timeout=5m
-
       - name: Check Coverage
-        if: matrix.go-version == '1.24'
         run: |
-          go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}' | awk '{if ($1 < 10.0) { print "Coverage is " $1 "%, which is below the 10% threshold"; exit 1 } else { print "Coverage is " $1 "%" }}'
+          go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}' | awk '{if ($1 < 10.0) { print "Coverage is " $1 "%\, which is below the 10% threshold"; exit 1 } else { print "Coverage is " $1 "%" }}'
 
   security:
     name: Security Scan
@@ -68,5 +53,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+          cache: true
       - name: Govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

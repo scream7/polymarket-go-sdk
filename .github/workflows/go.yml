@@ -32,3 +32,6 @@ jobs:
 
     - name: Run Tests
       run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+    - name: Run Vulnerability Scan
+      run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

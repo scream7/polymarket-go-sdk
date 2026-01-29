@@ -183,6 +183,23 @@ builder.PriceDec(decimal.NewFromFloat(0.5001)).
         SizeDec(decimal.NewFromInt(100))
 ```
 
+### 3. Remote Builder Attribution
+
+If you are developing a client-side application (Web/Mobile) and want to receive builder rewards without exposing your `Builder Secret` to the end users, you can use the **Remote Signer** pattern.
+
+1.  Deploy the standalone signer service found in `cmd/signer-server` to your secure infrastructure (support for Docker included).
+2.  Configure your client to use the remote signer:
+
+```go
+client := polymarket.NewClient(
+    polymarket.WithBuilderConfig(&auth.BuilderConfig{
+        Remote: &auth.BuilderRemoteConfig{
+            Host: "https://your-signer-api.com/v1/sign-builder",
+        },
+    }),
+)
+```
+
 ## 🗺 Roadmap
 
 We are committed to maintaining this SDK as the best-in-class solution for Polymarket.

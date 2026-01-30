@@ -1,9 +1,18 @@
 package rtds
 
-import "context"
+import (
+	"context"
+
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+)
 
 // Client defines the RTDS WebSocket interface.
 type Client interface {
+	// Authenticate sets default CLOB credentials for authenticated comment streams.
+	Authenticate(apiKey *auth.APIKey) Client
+	// Deauthenticate clears any stored credentials for authenticated streams.
+	Deauthenticate() Client
+
 	SubscribeCryptoPricesStream(ctx context.Context, symbols []string) (*Stream[CryptoPriceEvent], error)
 	SubscribeChainlinkPricesStream(ctx context.Context, feeds []string) (*Stream[ChainlinkPriceEvent], error)
 	SubscribeCommentsStream(ctx context.Context, req *CommentFilter) (*Stream[CommentEvent], error)

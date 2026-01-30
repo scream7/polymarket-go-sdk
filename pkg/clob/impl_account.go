@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
@@ -12,8 +13,24 @@ import (
 
 func (c *clientImpl) BalanceAllowance(ctx context.Context, req *clobtypes.BalanceAllowanceRequest) (clobtypes.BalanceAllowanceResponse, error) {
 	q := url.Values{}
-	if req != nil && req.Asset != "" {
-		q.Set("asset", req.Asset)
+	if req != nil {
+		if req.Asset != "" {
+			q.Set("asset", req.Asset)
+		}
+		if req.AssetType != "" {
+			q.Set("asset_type", string(req.AssetType))
+		}
+		if req.TokenID != "" {
+			q.Set("token_id", req.TokenID)
+		}
+		sigType := req.SignatureType
+		if sigType == nil {
+			val := int(c.signatureType)
+			sigType = &val
+		}
+		if sigType != nil {
+			q.Set("signature_type", strconv.Itoa(*sigType))
+		}
 	}
 	var resp clobtypes.BalanceAllowanceResponse
 	err := c.httpClient.Get(ctx, "/balance-allowance", q, &resp)
@@ -26,12 +43,26 @@ func (c *clientImpl) UpdateBalanceAllowance(ctx context.Context, req *clobtypes.
 		if req.Asset != "" {
 			q.Set("asset", req.Asset)
 		}
+		if req.AssetType != "" {
+			q.Set("asset_type", string(req.AssetType))
+		}
+		if req.TokenID != "" {
+			q.Set("token_id", req.TokenID)
+		}
+		sigType := req.SignatureType
+		if sigType == nil {
+			val := int(c.signatureType)
+			sigType = &val
+		}
+		if sigType != nil {
+			q.Set("signature_type", strconv.Itoa(*sigType))
+		}
 		if req.Amount != "" {
 			q.Set("amount", req.Amount)
 		}
 	}
 	var resp clobtypes.BalanceAllowanceResponse
-	err := c.httpClient.Get(ctx, "/balance-allowance/update", q, &resp)
+	err := c.httpClient.Call(ctx, "GET", "/balance-allowance/update", q, nil, nil, nil)
 	return resp, mapError(err)
 }
 
@@ -47,8 +78,14 @@ func (c *clientImpl) Notifications(ctx context.Context, req *clobtypes.Notificat
 
 func (c *clientImpl) DropNotifications(ctx context.Context, req *clobtypes.DropNotificationsRequest) (clobtypes.DropNotificationsResponse, error) {
 	q := url.Values{}
-	if req != nil && req.ID != "" {
-		q.Set("id", req.ID)
+	if req != nil {
+		ids := req.IDs
+		if len(ids) == 0 && req.ID != "" {
+			ids = []string{req.ID}
+		}
+		if len(ids) > 0 {
+			q.Set("ids", strings.Join(ids, ","))
+		}
 	}
 	var resp clobtypes.DropNotificationsResponse
 	var err error
@@ -62,8 +99,24 @@ func (c *clientImpl) DropNotifications(ctx context.Context, req *clobtypes.DropN
 
 func (c *clientImpl) UserEarnings(ctx context.Context, req *clobtypes.UserEarningsRequest) (clobtypes.UserEarningsResponse, error) {
 	q := url.Values{}
-	if req != nil && req.Asset != "" {
-		q.Set("asset", req.Asset)
+	if req != nil {
+		if req.Date != "" {
+			q.Set("date", req.Date)
+		}
+		sigType := req.SignatureType
+		if sigType == nil {
+			val := int(c.signatureType)
+			sigType = &val
+		}
+		if sigType != nil {
+			q.Set("signature_type", strconv.Itoa(*sigType))
+		}
+		if req.NextCursor != "" {
+			q.Set("next_cursor", req.NextCursor)
+		}
+		if req.Asset != "" {
+			q.Set("asset", req.Asset)
+		}
 	}
 	var resp clobtypes.UserEarningsResponse
 	err := c.httpClient.Get(ctx, "/rewards/user", q, &resp)
@@ -72,8 +125,21 @@ func (c *clientImpl) UserEarnings(ctx context.Context, req *clobtypes.UserEarnin
 
 func (c *clientImpl) UserTotalEarnings(ctx context.Context, req *clobtypes.UserTotalEarningsRequest) (clobtypes.UserTotalEarningsResponse, error) {
 	q := url.Values{}
-	if req != nil && req.Asset != "" {
-		q.Set("asset", req.Asset)
+	if req != nil {
+		if req.Date != "" {
+			q.Set("date", req.Date)
+		}
+		sigType := req.SignatureType
+		if sigType == nil {
+			val := int(c.signatureType)
+			sigType = &val
+		}
+		if sigType != nil {
+			q.Set("signature_type", strconv.Itoa(*sigType))
+		}
+		if req.Asset != "" {
+			q.Set("asset", req.Asset)
+		}
 	}
 	var resp clobtypes.UserTotalEarningsResponse
 	err := c.httpClient.Get(ctx, "/rewards/user/total", q, &resp)
@@ -86,34 +152,77 @@ func (c *clientImpl) UserRewardPercentages(ctx context.Context, req *clobtypes.U
 	return resp, mapError(err)
 }
 
-func (c *clientImpl) RewardsMarketsCurrent(ctx context.Context) (clobtypes.RewardsMarketsResponse, error) {
+func (c *clientImpl) RewardsMarketsCurrent(ctx context.Context, req *clobtypes.RewardsMarketsRequest) (clobtypes.RewardsMarketsResponse, error) {
+	q := url.Values{}
+	if req != nil && req.NextCursor != "" {
+		q.Set("next_cursor", req.NextCursor)
+	}
 	var resp clobtypes.RewardsMarketsResponse
-	err := c.httpClient.Get(ctx, "/rewards/markets/current", nil, &resp)
+	err := c.httpClient.Get(ctx, "/rewards/markets/current", q, &resp)
 	return resp, mapError(err)
 }
 
-func (c *clientImpl) RewardsMarkets(ctx context.Context, id string) (clobtypes.RewardsMarketResponse, error) {
+func (c *clientImpl) RewardsMarkets(ctx context.Context, req *clobtypes.RewardsMarketRequest) (clobtypes.RewardsMarketResponse, error) {
+	path := ""
+	q := url.Values{}
+	if req != nil {
+		path = req.MarketID
+		if req.NextCursor != "" {
+			q.Set("next_cursor", req.NextCursor)
+		}
+	}
+	if path == "" {
+		return clobtypes.RewardsMarketResponse{}, fmt.Errorf("market_id is required")
+	}
 	var resp clobtypes.RewardsMarketResponse
-	err := c.httpClient.Get(ctx, fmt.Sprintf("/rewards/markets/%s", id), nil, &resp)
+	err := c.httpClient.Get(ctx, fmt.Sprintf("/rewards/markets/%s", path), q, &resp)
 	return resp, mapError(err)
 }
 
 func (c *clientImpl) UserRewardsByMarket(ctx context.Context, req *clobtypes.UserRewardsByMarketRequest) (clobtypes.UserRewardsByMarketResponse, error) {
 	q := url.Values{}
-	if req != nil && req.MarketID != "" {
-		q.Set("market_id", req.MarketID)
+	if req != nil {
+		if req.Date != "" {
+			q.Set("date", req.Date)
+		}
+		if req.OrderBy != "" {
+			q.Set("order_by", req.OrderBy)
+		}
+		if req.Position != "" {
+			q.Set("position", req.Position)
+		}
+		q.Set("no_competition", strconv.FormatBool(req.NoCompetition))
+		sigType := req.SignatureType
+		if sigType == nil {
+			val := int(c.signatureType)
+			sigType = &val
+		}
+		if sigType != nil {
+			q.Set("signature_type", strconv.Itoa(*sigType))
+		}
+		if req.NextCursor != "" {
+			q.Set("next_cursor", req.NextCursor)
+		}
 	}
 	var resp clobtypes.UserRewardsByMarketResponse
-	err := c.httpClient.Get(ctx, "/rewards/user/markets", q, &resp)
+	err := c.httpClient.Get(ctx, "/rewards/user/total", q, &resp)
 	return resp, mapError(err)
 }
 
 func (c *clientImpl) CreateAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error) {
+	nonce := int64(0)
+	if c.authNonce != nil {
+		nonce = *c.authNonce
+	}
+	return c.CreateAPIKeyWithNonce(ctx, nonce)
+}
+
+func (c *clientImpl) CreateAPIKeyWithNonce(ctx context.Context, nonce int64) (clobtypes.APIKeyResponse, error) {
 	if c.signer == nil {
 		return clobtypes.APIKeyResponse{}, auth.ErrMissingSigner
 	}
 
-	headersRaw, err := auth.BuildL1Headers(c.signer, 0, 0)
+	headersRaw, err := auth.BuildL1Headers(c.signer, 0, nonce)
 	if err != nil {
 		return clobtypes.APIKeyResponse{}, err
 	}
@@ -153,8 +262,16 @@ func (c *clientImpl) DeleteAPIKey(ctx context.Context, id string) (clobtypes.API
 }
 
 func (c *clientImpl) DeriveAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error) {
+	nonce := int64(0)
+	if c.authNonce != nil {
+		nonce = *c.authNonce
+	}
+	return c.DeriveAPIKeyWithNonce(ctx, nonce)
+}
+
+func (c *clientImpl) DeriveAPIKeyWithNonce(ctx context.Context, nonce int64) (clobtypes.APIKeyResponse, error) {
 	var resp clobtypes.APIKeyResponse
-	headersRaw, err := auth.BuildL1Headers(c.signer, 0, 0)
+	headersRaw, err := auth.BuildL1Headers(c.signer, 0, nonce)
 	if err != nil {
 		return clobtypes.APIKeyResponse{}, err
 	}
@@ -166,6 +283,22 @@ func (c *clientImpl) DeriveAPIKey(ctx context.Context) (clobtypes.APIKeyResponse
 	}
 	err = c.httpClient.CallWithHeaders(ctx, "GET", "/auth/derive-api-key", nil, nil, &resp, headers)
 	return resp, mapError(err)
+}
+
+func (c *clientImpl) CreateOrDeriveAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error) {
+	nonce := int64(0)
+	if c.authNonce != nil {
+		nonce = *c.authNonce
+	}
+	return c.CreateOrDeriveAPIKeyWithNonce(ctx, nonce)
+}
+
+func (c *clientImpl) CreateOrDeriveAPIKeyWithNonce(ctx context.Context, nonce int64) (clobtypes.APIKeyResponse, error) {
+	resp, err := c.CreateAPIKeyWithNonce(ctx, nonce)
+	if err == nil {
+		return resp, nil
+	}
+	return c.DeriveAPIKeyWithNonce(ctx, nonce)
 }
 
 func (c *clientImpl) ClosedOnlyStatus(ctx context.Context) (clobtypes.ClosedOnlyResponse, error) {

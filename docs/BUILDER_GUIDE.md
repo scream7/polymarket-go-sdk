@@ -111,6 +111,14 @@ Once you have your Builder credentials, configure the client to use them for all
     })
 ```
 
+### Switching to Builder Mode After Auth
+
+If you already created an authenticated client (and heartbeats are running), prefer `PromoteToBuilder` so builder headers apply immediately and heartbeats restart with the new attribution config.
+
+```go
+builderClient := authClient.PromoteToBuilder(myBuilderConfig)
+```
+
 ---
 
 ## Remote Signing (Advanced)

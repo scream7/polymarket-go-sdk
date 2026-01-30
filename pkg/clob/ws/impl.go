@@ -41,11 +41,18 @@ type clientImpl struct {
 	closeOnce    sync.Once
 	closing      atomic.Bool
 	// Subscription state
-	debug          bool
-	disablePing    bool
-	reconnect      bool
-	reconnectMax   int
-	reconnectDelay time.Duration
+	debug               bool
+	disablePing         bool
+	reconnect           bool
+	reconnectMax        int
+	reconnectDelay      time.Duration
+	reconnectMaxDelay   time.Duration
+	reconnectMultiplier float64
+	heartbeatInterval   time.Duration
+	heartbeatTimeout    time.Duration
+
+	lastPongMarket atomic.Int64
+	lastPongUser   atomic.Int64
 
 	subMu          sync.Mutex
 	marketRefs     map[string]int
@@ -100,56 +107,105 @@ func NewClient(url string, signer auth.Signer, apiKey *auth.APIKey) (Client, err
 			reconnectDelay = time.Duration(ms) * time.Millisecond
 		}
 	}
+	reconnectMaxDelay := 30 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("CLOB_WS_RECONNECT_MAX_DELAY_MS")); raw != "" {
+		if ms, err := strconv.Atoi(raw); err == nil && ms > 0 {
+			reconnectMaxDelay = time.Duration(ms) * time.Millisecond
+		}
+	}
+	reconnectMultiplier := 2.0
+	if raw := strings.TrimSpace(os.Getenv("CLOB_WS_RECONNECT_BACKOFF_MULTIPLIER")); raw != "" {
+		if mult, err := strconv.ParseFloat(raw, 64); err == nil && mult > 0 {
+			reconnectMultiplier = mult
+		}
+	}
 	reconnectMax := 5
 	if raw := strings.TrimSpace(os.Getenv("CLOB_WS_RECONNECT_MAX")); raw != "" {
 		if max, err := strconv.Atoi(raw); err == nil {
 			reconnectMax = max
 		}
 	}
+	heartbeatInterval := 10 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("CLOB_WS_HEARTBEAT_INTERVAL_MS")); raw != "" {
+		if ms, err := strconv.Atoi(raw); err == nil && ms > 0 {
+			heartbeatInterval = time.Duration(ms) * time.Millisecond
+		}
+	}
+	heartbeatTimeout := 30 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("CLOB_WS_HEARTBEAT_TIMEOUT_MS")); raw != "" {
+		if ms, err := strconv.Atoi(raw); err == nil && ms > 0 {
+			heartbeatTimeout = time.Duration(ms) * time.Millisecond
+		}
+	} else if heartbeatInterval > 0 {
+		heartbeatTimeout = heartbeatInterval * 3
+	}
 
 	c := &clientImpl{
-		baseURL:            baseURL,
-		marketURL:          marketURL,
-		userURL:            userURL,
-		signer:             signer,
-		apiKey:             apiKey,
-		debug:              os.Getenv("CLOB_WS_DEBUG") != "",
-		disablePing:        os.Getenv("CLOB_WS_DISABLE_PING") != "",
-		reconnect:          reconnect,
-		reconnectDelay:     reconnectDelay,
-		reconnectMax:       reconnectMax,
-		done:               make(chan struct{}),
-		marketRefs:         make(map[string]int),
-		userRefs:           make(map[string]int),
-		marketState:        ConnectionDisconnected,
-		userState:          ConnectionDisconnected,
-		orderbookSubs:      make(map[string]*subscriptionEntry[OrderbookEvent]),
-		priceSubs:          make(map[string]*subscriptionEntry[PriceEvent]),
-		midpointSubs:       make(map[string]*subscriptionEntry[MidpointEvent]),
-		lastTradeSubs:      make(map[string]*subscriptionEntry[LastTradePriceEvent]),
-		tickSizeSubs:       make(map[string]*subscriptionEntry[TickSizeChangeEvent]),
-		bestBidAskSubs:     make(map[string]*subscriptionEntry[BestBidAskEvent]),
-		newMarketSubs:      make(map[string]*subscriptionEntry[NewMarketEvent]),
-		marketResolvedSubs: make(map[string]*subscriptionEntry[MarketResolvedEvent]),
-		tradeSubs:          make(map[string]*subscriptionEntry[TradeEvent]),
-		orderSubs:          make(map[string]*subscriptionEntry[OrderEvent]),
-		stateSubs:          make(map[string]*subscriptionEntry[ConnectionStateEvent]),
-		orderbookCh:        make(chan OrderbookEvent, 100),
-		priceCh:            make(chan PriceEvent, 100),
-		midpointCh:         make(chan MidpointEvent, 100),
-		lastTradeCh:        make(chan LastTradePriceEvent, 100),
-		tickSizeCh:         make(chan TickSizeChangeEvent, 100),
-		bestBidAskCh:       make(chan BestBidAskEvent, 100),
-		newMarketCh:        make(chan NewMarketEvent, 100),
-		marketResolvedCh:   make(chan MarketResolvedEvent, 100),
-		tradeCh:            make(chan TradeEvent, 100),
-		orderCh:            make(chan OrderEvent, 100),
+		baseURL:             baseURL,
+		marketURL:           marketURL,
+		userURL:             userURL,
+		signer:              signer,
+		apiKey:              apiKey,
+		debug:               os.Getenv("CLOB_WS_DEBUG") != "",
+		disablePing:         os.Getenv("CLOB_WS_DISABLE_PING") != "",
+		reconnect:           reconnect,
+		reconnectDelay:      reconnectDelay,
+		reconnectMaxDelay:   reconnectMaxDelay,
+		reconnectMultiplier: reconnectMultiplier,
+		reconnectMax:        reconnectMax,
+		heartbeatInterval:   heartbeatInterval,
+		heartbeatTimeout:    heartbeatTimeout,
+		done:                make(chan struct{}),
+		marketRefs:          make(map[string]int),
+		userRefs:            make(map[string]int),
+		marketState:         ConnectionDisconnected,
+		userState:           ConnectionDisconnected,
+		orderbookSubs:       make(map[string]*subscriptionEntry[OrderbookEvent]),
+		priceSubs:           make(map[string]*subscriptionEntry[PriceEvent]),
+		midpointSubs:        make(map[string]*subscriptionEntry[MidpointEvent]),
+		lastTradeSubs:       make(map[string]*subscriptionEntry[LastTradePriceEvent]),
+		tickSizeSubs:        make(map[string]*subscriptionEntry[TickSizeChangeEvent]),
+		bestBidAskSubs:      make(map[string]*subscriptionEntry[BestBidAskEvent]),
+		newMarketSubs:       make(map[string]*subscriptionEntry[NewMarketEvent]),
+		marketResolvedSubs:  make(map[string]*subscriptionEntry[MarketResolvedEvent]),
+		tradeSubs:           make(map[string]*subscriptionEntry[TradeEvent]),
+		orderSubs:           make(map[string]*subscriptionEntry[OrderEvent]),
+		stateSubs:           make(map[string]*subscriptionEntry[ConnectionStateEvent]),
+		orderbookCh:         make(chan OrderbookEvent, 100),
+		priceCh:             make(chan PriceEvent, 100),
+		midpointCh:          make(chan MidpointEvent, 100),
+		lastTradeCh:         make(chan LastTradePriceEvent, 100),
+		tickSizeCh:          make(chan TickSizeChangeEvent, 100),
+		bestBidAskCh:        make(chan BestBidAskEvent, 100),
+		newMarketCh:         make(chan NewMarketEvent, 100),
+		marketResolvedCh:    make(chan MarketResolvedEvent, 100),
+		tradeCh:             make(chan TradeEvent, 100),
+		orderCh:             make(chan OrderEvent, 100),
 	}
 
 	if err := c.ensureMarketConn(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+func (c *clientImpl) Authenticate(signer auth.Signer, apiKey *auth.APIKey) Client {
+	c.signer = signer
+	c.apiKey = apiKey
+	c.subMu.Lock()
+	c.lastAuth = nil
+	c.subMu.Unlock()
+	return c
+}
+
+func (c *clientImpl) Deauthenticate() Client {
+	c.signer = nil
+	c.apiKey = nil
+	c.subMu.Lock()
+	c.lastAuth = nil
+	c.subMu.Unlock()
+	c.closeConn(ChannelUser)
+	return c
 }
 
 func normalizeWSURLs(raw string) (string, string, string) {
@@ -171,13 +227,27 @@ func normalizeWSURLs(raw string) (string, string, string) {
 }
 
 func (c *clientImpl) pingLoop(channel Channel) {
-	ticker := time.NewTicker(10 * time.Second) // WSS quickstart uses 10s PING interval
+	interval := c.heartbeatInterval
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-c.done:
 			return
 		case <-ticker.C:
+			if timeout := c.heartbeatTimeout; timeout > 0 {
+				last := c.lastPong(channel)
+				if !last.IsZero() && time.Since(last) > timeout {
+					if c.debug {
+						log.Printf("heartbeat timeout on %s (last pong %s)", channel, last.Format(time.RFC3339))
+					}
+					c.closeConn(channel)
+					return
+				}
+			}
 			// CLOB WS uses "PING" string for Keep-Alive
 			err := c.writeMessage(channel, []byte("PING"))
 			if err != nil {
@@ -199,6 +269,7 @@ func (c *clientImpl) ensureMarketConn() error {
 		return err
 	}
 	c.setConnState(ChannelMarket, ConnectionConnected, 0)
+	c.setLastPong(ChannelMarket, time.Now())
 	go c.readLoop(ChannelMarket)
 	if !c.disablePing {
 		go c.pingLoop(ChannelMarket)
@@ -218,6 +289,7 @@ func (c *clientImpl) ensureUserConn() error {
 		return err
 	}
 	c.setConnState(ChannelUser, ConnectionConnected, 0)
+	c.setLastPong(ChannelUser, time.Now())
 	go c.readLoop(ChannelUser)
 	if !c.disablePing {
 		go c.pingLoop(ChannelUser)
@@ -297,6 +369,8 @@ func (c *clientImpl) readLoop(channel Channel) {
 			break
 		}
 
+		c.setLastPong(channel, time.Now())
+
 		// Refresh read deadline
 		_ = conn.SetReadDeadline(time.Now().Add(ReadTimeout))
 
@@ -334,6 +408,29 @@ func (c *clientImpl) readLoop(channel Channel) {
 	if c.closing.Load() {
 		c.shutdown()
 	}
+}
+
+func (c *clientImpl) setLastPong(channel Channel, t time.Time) {
+	switch channel {
+	case ChannelMarket:
+		c.lastPongMarket.Store(t.UnixNano())
+	case ChannelUser:
+		c.lastPongUser.Store(t.UnixNano())
+	}
+}
+
+func (c *clientImpl) lastPong(channel Channel) time.Time {
+	switch channel {
+	case ChannelMarket:
+		if nanos := c.lastPongMarket.Load(); nanos > 0 {
+			return time.Unix(0, nanos)
+		}
+	case ChannelUser:
+		if nanos := c.lastPongUser.Load(); nanos > 0 {
+			return time.Unix(0, nanos)
+		}
+	}
+	return time.Time{}
 }
 
 func (c *clientImpl) processEvent(raw map[string]interface{}) {
@@ -1224,6 +1321,17 @@ func (c *clientImpl) snapshotSubscriptionRefs() ([]string, []string, bool, *Auth
 func (c *clientImpl) reconnectLoop(channel Channel) error {
 	var lastErr error
 	delay := c.reconnectDelay
+	if delay <= 0 {
+		delay = 1 * time.Second
+	}
+	maxDelay := c.reconnectMaxDelay
+	if maxDelay <= 0 {
+		maxDelay = 30 * time.Second
+	}
+	multiplier := c.reconnectMultiplier
+	if multiplier <= 0 {
+		multiplier = 2
+	}
 
 	for attempt := 0; c.reconnectMax <= 0 || attempt < c.reconnectMax; attempt++ {
 		if c.closing.Load() {
@@ -1256,9 +1364,14 @@ func (c *clientImpl) reconnectLoop(channel Channel) error {
 		if c.debug {
 			log.Printf("ws reconnect failed: %v", err)
 		}
-		if delay < 30*time.Second {
-			delay *= 2
+		nextDelay := time.Duration(float64(delay) * multiplier)
+		if nextDelay <= 0 {
+			nextDelay = delay
 		}
+		if nextDelay > maxDelay {
+			nextDelay = maxDelay
+		}
+		delay = nextDelay
 	}
 	c.setConnState(channel, ConnectionDisconnected, 0)
 	return lastErr

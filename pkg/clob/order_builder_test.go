@@ -2,10 +2,12 @@ package clob
 
 import (
 	"context"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
@@ -211,7 +213,7 @@ func TestBuildLimitOrder(t *testing.T) {
 			Price(0.5).
 			Size(10).
 			AmountUSDC(5)
-		
+
 		// Test Proxy
 		signable, err := builder.UseProxy().BuildMarketWithContext(ctx)
 		if err != nil {
@@ -230,4 +232,58 @@ func TestBuildLimitOrder(t *testing.T) {
 			t.Errorf("safe type mismatch")
 		}
 	})
+}
+
+func TestOrderBuilderDefaultsFromClient(t *testing.T) {
+	stub := newStubClient()
+	stub.tickSize = "0.01"
+	stub.feeRate = 0
+
+	signer := mustSigner(t)
+	funder := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	stub.clientImpl.signatureType = auth.SignatureProxy
+	stub.clientImpl.funder = &funder
+	stub.clientImpl.saltGenerator = func() (*big.Int, error) {
+		return big.NewInt(42), nil
+	}
+
+	signable, err := NewOrderBuilder(stub, signer).
+		TokenID("123").
+		Side("BUY").
+		Price(0.5).
+		Size(10).
+		BuildSignableWithContext(context.Background())
+	if err != nil {
+		t.Fatalf("BuildSignable failed: %v", err)
+	}
+	if signable.Order.SignatureType == nil || *signable.Order.SignatureType != 1 {
+		t.Fatalf("signature type mismatch: %+v", signable.Order.SignatureType)
+	}
+	if signable.Order.Maker != funder {
+		t.Fatalf("maker mismatch: got %s want %s", signable.Order.Maker.Hex(), funder.Hex())
+	}
+	if signable.Order.Salt.Int == nil || signable.Order.Salt.Int.Int64() != 42 {
+		t.Fatalf("salt mismatch: got %v", signable.Order.Salt.Int)
+	}
+}
+
+func TestOrderBuilderFunderRequiresSignature(t *testing.T) {
+	stub := newStubClient()
+	stub.tickSize = "0.01"
+	stub.feeRate = 0
+
+	signer := mustSigner(t)
+	funder := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	stub.clientImpl.signatureType = auth.SignatureEOA
+	stub.clientImpl.funder = &funder
+
+	_, err := NewOrderBuilder(stub, signer).
+		TokenID("123").
+		Side("BUY").
+		Price(0.5).
+		Size(1).
+		BuildSignableWithContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "funder requires non-EOA") {
+		t.Fatalf("expected funder signature error, got %v", err)
+	}
 }

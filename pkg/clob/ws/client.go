@@ -5,12 +5,19 @@ package ws
 
 import (
 	"context"
+
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
 )
 
 // Client defines the interface for interacting with Polymarket's WebSocket services.
 // It provides a stream-based API for real-time market data and private account updates.
 type Client interface {
 	// -- Connection Management --
+
+	// Authenticate sets API credentials for private user streams.
+	Authenticate(signer auth.Signer, apiKey *auth.APIKey) Client
+	// Deauthenticate clears API credentials for private user streams.
+	Deauthenticate() Client
 
 	// ConnectionState returns the current status of a specific WebSocket channel.
 	ConnectionState(channel Channel) ConnectionState

@@ -4,12 +4,14 @@ package clob
 
 import (
 	"context"
+	"time"
 
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/heartbeat"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/rfq"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/ws"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 )
 
 // Client defines the primary interface for interacting with the Polymarket CLOB.
@@ -21,12 +23,26 @@ type Client interface {
 	WithAuth(signer auth.Signer, apiKey *auth.APIKey) Client
 	// WithBuilderConfig returns a new client instance configured for builder attribution.
 	WithBuilderConfig(config *auth.BuilderConfig) Client
+	// PromoteToBuilder switches the client into builder attribution mode.
+	PromoteToBuilder(config *auth.BuilderConfig) Client
+	// WithSignatureType sets the default signature type used for order signing and balance/rewards requests.
+	WithSignatureType(sigType auth.SignatureType) Client
+	// WithAuthNonce sets the default nonce used when creating/deriving API keys.
+	WithAuthNonce(nonce int64) Client
+	// WithFunder sets the default funder (maker) address used for orders.
+	WithFunder(funder types.Address) Client
+	// WithSaltGenerator sets the default salt generator used for new orders.
+	WithSaltGenerator(gen SaltGenerator) Client
 	// WithUseServerTime configures the client to synchronize with server time for request signing.
 	WithUseServerTime(use bool) Client
 	// WithGeoblockHost overrides the host used for checking geoblocking status.
 	WithGeoblockHost(host string) Client
 	// WithWS associates a WebSocket client with this REST client.
 	WithWS(ws ws.Client) Client
+	// WithHeartbeatInterval enables automatic heartbeat scheduling.
+	WithHeartbeatInterval(interval time.Duration) Client
+	// StopHeartbeats stops any active heartbeat loop.
+	StopHeartbeats()
 
 	// -- High-level Helpers --
 
@@ -91,7 +107,7 @@ type Client interface {
 	NegRisk(ctx context.Context, req *clobtypes.NegRiskRequest) (clobtypes.NegRiskResponse, error)
 	// FeeRate retrieves the current fee rate applicable to a token.
 	FeeRate(ctx context.Context, req *clobtypes.FeeRateRequest) (clobtypes.FeeRateResponse, error)
-	// PricesHistory retrieves historical price points for a token.
+	// PricesHistory retrieves historical price points for a market (condition ID) or token.
 	PricesHistory(ctx context.Context, req *clobtypes.PricesHistoryRequest) (clobtypes.PricesHistoryResponse, error)
 
 	// -- Cache Management --
@@ -160,22 +176,30 @@ type Client interface {
 	// UserRewardPercentages retrieves the current reward rate multipliers for the user.
 	UserRewardPercentages(ctx context.Context, req *clobtypes.UserRewardPercentagesRequest) (clobtypes.UserRewardPercentagesResponse, error)
 	// RewardsMarketsCurrent retrieves the list of markets currently eligible for liquidity rewards.
-	RewardsMarketsCurrent(ctx context.Context) (clobtypes.RewardsMarketsResponse, error)
+	RewardsMarketsCurrent(ctx context.Context, req *clobtypes.RewardsMarketsRequest) (clobtypes.RewardsMarketsResponse, error)
 	// RewardsMarkets retrieves historical reward details for a specific market.
-	RewardsMarkets(ctx context.Context, id string) (clobtypes.RewardsMarketResponse, error)
-	// UserRewardsByMarket retrieves reward details for the user in a specific market.
+	RewardsMarkets(ctx context.Context, req *clobtypes.RewardsMarketRequest) (clobtypes.RewardsMarketResponse, error)
+	// UserRewardsByMarket retrieves user earnings alongside market rewards configuration.
 	UserRewardsByMarket(ctx context.Context, req *clobtypes.UserRewardsByMarketRequest) (clobtypes.UserRewardsByMarketResponse, error)
 
 	// -- API Key Management --
 
 	// CreateAPIKey creates a new set of L2 API credentials using an L1 signature.
 	CreateAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error)
+	// CreateAPIKeyWithNonce creates a new set of L2 API credentials with an explicit nonce.
+	CreateAPIKeyWithNonce(ctx context.Context, nonce int64) (clobtypes.APIKeyResponse, error)
 	// ListAPIKeys lists all active L2 API keys for the authenticated account.
 	ListAPIKeys(ctx context.Context) (clobtypes.APIKeyListResponse, error)
 	// DeleteAPIKey revokes a specific L2 API key.
 	DeleteAPIKey(ctx context.Context, id string) (clobtypes.APIKeyResponse, error)
 	// DeriveAPIKey computes the deterministic L2 API key associated with the L1 wallet.
 	DeriveAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error)
+	// DeriveAPIKeyWithNonce computes the deterministic L2 API key with an explicit nonce.
+	DeriveAPIKeyWithNonce(ctx context.Context, nonce int64) (clobtypes.APIKeyResponse, error)
+	// CreateOrDeriveAPIKey attempts to create a new API key, falling back to derive on failure.
+	CreateOrDeriveAPIKey(ctx context.Context) (clobtypes.APIKeyResponse, error)
+	// CreateOrDeriveAPIKeyWithNonce attempts to create a new API key with an explicit nonce, falling back to derive on failure.
+	CreateOrDeriveAPIKeyWithNonce(ctx context.Context, nonce int64) (clobtypes.APIKeyResponse, error)
 	// ClosedOnlyStatus checks if the account is restricted to "close-only" trading.
 	ClosedOnlyStatus(ctx context.Context) (clobtypes.ClosedOnlyResponse, error)
 

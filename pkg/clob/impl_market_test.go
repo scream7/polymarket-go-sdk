@@ -1,29 +1,80 @@
 package clob
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/transport"
 )
 
+type assertBodyDoer struct {
+	t         *testing.T
+	expected  map[string]string
+	responses map[string]string
+}
+
+func (d *assertBodyDoer) Do(req *http.Request) (*http.Response, error) {
+	key := req.URL.Path
+	if req.URL.RawQuery != "" {
+		key += "?" + req.URL.RawQuery
+	}
+	if expected, ok := d.expected[key]; ok {
+		body, _ := io.ReadAll(req.Body)
+		if expected == "" {
+			if len(bytes.TrimSpace(body)) > 0 {
+				d.t.Fatalf("expected empty body for %s, got %s", key, string(body))
+			}
+		} else {
+			var gotPayload interface{}
+			var wantPayload interface{}
+			if err := json.Unmarshal(body, &gotPayload); err != nil {
+				d.t.Fatalf("failed to decode request body for %s: %v", key, err)
+			}
+			if err := json.Unmarshal([]byte(expected), &wantPayload); err != nil {
+				d.t.Fatalf("failed to decode expected body for %s: %v", key, err)
+			}
+			if !reflect.DeepEqual(gotPayload, wantPayload) {
+				d.t.Fatalf("body mismatch for %s: got %v want %v", key, gotPayload, wantPayload)
+			}
+		}
+	}
+
+	payload := "{}"
+	if d.responses != nil {
+		if resp, ok := d.responses[key]; ok {
+			payload = resp
+		}
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewBufferString(payload)),
+		Header:     make(http.Header),
+	}
+	return resp, nil
+}
+
 func TestMarketMethods(t *testing.T) {
 	doer := &staticDoer{
 		responses: map[string]string{
-			"/markets":                  `{"data":[{"id":"m1"}],"next_cursor":"LTE="}`,
-			"/markets/m1":               `{"id":"m1","question":"test?"}`,
-			"/simplified-markets":       `{"data":[{"id":"s1"}]}`,
-			"/sampling-markets":          `{"data":[{"id":"sam1"}]}`,
+			"/markets":                     `{"data":[{"id":"m1"}],"next_cursor":"LTE="}`,
+			"/markets/m1":                  `{"id":"m1","question":"test?"}`,
+			"/simplified-markets":          `{"data":[{"id":"s1"}]}`,
+			"/sampling-markets":            `{"data":[{"id":"sam1"}]}`,
 			"/sampling-simplified-markets": `{"data":[{"id":"ss1"}]}`,
-			"/book?token_id=t1":         `{"market_id":"m1","bids":[],"asks":[]}`,
-			"/midpoint?token_id=t1":     `{"midpoint":"0.5"}`,
-			"/price?token_id=t1":        `{"price":"0.51"}`,
-			"/spread?token_id=t1":       `{"spread":"0.01"}`,
-			"/tick-size?token_id=t1":    `{"minimum_tick_size":"0.01"}`,
-			"/neg-risk?token_id=t1":     `{"neg_risk":true}`,
-			"/fee-rate?token_id=t1":     `{"base_fee":10}`,
-			"/prices-history?token_id=t1": `[{"t":123,"p":"0.5"}]`,
+			"/book?token_id=t1":            `{"market_id":"m1","bids":[],"asks":[]}`,
+			"/midpoint?token_id=t1":        `{"midpoint":"0.5"}`,
+			"/price?token_id=t1":           `{"price":"0.51"}`,
+			"/spread?token_id=t1":          `{"spread":"0.01"}`,
+			"/tick-size?token_id=t1":       `{"minimum_tick_size":"0.01"}`,
+			"/neg-risk?token_id=t1":        `{"neg_risk":true}`,
+			"/fee-rate?token_id=t1":        `{"base_fee":10}`,
+			"/prices-history?token_id=t1":  `{"history":[{"t":123,"p":"0.5"}]}`,
 		},
 	}
 	client := &clientImpl{
@@ -113,11 +164,11 @@ func TestMarketMethods(t *testing.T) {
 func TestBatchMethods(t *testing.T) {
 	doer := &staticDoer{
 		responses: map[string]string{
-			"/books":               `[{"market_id":"m1"}]`,
-			"/midpoints":           `[{"midpoint":"0.5"}]`,
-			"/prices":              `[{"price":"0.5"}]`,
-			"/spreads":             `[{"spread":"0.01"}]`,
-			"/last-trades-prices":  `[{"price":"0.5"}]`,
+			"/books":              `[{"market_id":"m1"}]`,
+			"/midpoints":          `[{"midpoint":"0.5"}]`,
+			"/prices":             `[{"price":"0.5"}]`,
+			"/spreads":            `[{"spread":"0.01"}]`,
+			"/last-trades-prices": `[{"price":"0.5"}]`,
 		},
 	}
 	client := &clientImpl{
@@ -150,6 +201,78 @@ func TestBatchMethods(t *testing.T) {
 		resp, err := client.Spreads(ctx, &clobtypes.SpreadsRequest{TokenIDs: []string{"t1"}})
 		if err != nil || len(resp) == 0 {
 			t.Errorf("Spreads failed: %v", err)
+		}
+	})
+
+	t.Run("OrderBooksRequestsBody", func(t *testing.T) {
+		doer := &assertBodyDoer{
+			t: t,
+			expected: map[string]string{
+				"/books": `[{"token_id":"t1","side":"BUY"},{"token_id":"t2"}]`,
+			},
+			responses: map[string]string{
+				"/books": `[{"market_id":"m1"}]`,
+			},
+		}
+		bodyClient := &clientImpl{
+			httpClient: transport.NewClient(doer, "http://example"),
+		}
+		_, err := bodyClient.OrderBooks(ctx, &clobtypes.BooksRequest{
+			Requests: []clobtypes.BookRequest{
+				{TokenID: "t1", Side: "BUY"},
+				{TokenID: "t2"},
+			},
+		})
+		if err != nil {
+			t.Errorf("OrderBooks requests body failed: %v", err)
+		}
+	})
+
+	t.Run("PricesRequestsBody", func(t *testing.T) {
+		doer := &assertBodyDoer{
+			t: t,
+			expected: map[string]string{
+				"/prices": `[{"token_id":"t1","side":"BUY"},{"token_id":"t2","side":"SELL"}]`,
+			},
+			responses: map[string]string{
+				"/prices": `[{"price":"0.5"}]`,
+			},
+		}
+		bodyClient := &clientImpl{
+			httpClient: transport.NewClient(doer, "http://example"),
+		}
+		_, err := bodyClient.Prices(ctx, &clobtypes.PricesRequest{
+			Requests: []clobtypes.PriceRequest{
+				{TokenID: "t1", Side: "BUY"},
+				{TokenID: "t2", Side: "SELL"},
+			},
+		})
+		if err != nil {
+			t.Errorf("Prices requests body failed: %v", err)
+		}
+	})
+
+	t.Run("SpreadsRequestsBody", func(t *testing.T) {
+		doer := &assertBodyDoer{
+			t: t,
+			expected: map[string]string{
+				"/spreads": `[{"token_id":"t1","side":"BUY"},{"token_id":"t2"}]`,
+			},
+			responses: map[string]string{
+				"/spreads": `[{"spread":"0.01"}]`,
+			},
+		}
+		bodyClient := &clientImpl{
+			httpClient: transport.NewClient(doer, "http://example"),
+		}
+		_, err := bodyClient.Spreads(ctx, &clobtypes.SpreadsRequest{
+			Requests: []clobtypes.SpreadRequest{
+				{TokenID: "t1", Side: "BUY"},
+				{TokenID: "t2"},
+			},
+		})
+		if err != nil {
+			t.Errorf("Spreads requests body failed: %v", err)
 		}
 	})
 

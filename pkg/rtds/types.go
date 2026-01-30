@@ -46,6 +46,30 @@ type Subscription struct {
 	ClobAuth *ClobAuth   `json:"clob_auth,omitempty"`
 }
 
+// MarshalJSON customizes filters encoding to align with RTDS expectations.
+// For non-Chainlink topics, JSON strings are parsed and sent as raw JSON.
+// Chainlink filters are always serialized as a JSON string.
+func (s Subscription) MarshalJSON() ([]byte, error) {
+	payload := map[string]interface{}{
+		"topic": s.Topic,
+		"type":  s.MsgType,
+	}
+	if s.Filters != nil {
+		filters := s.Filters
+		if raw, ok := s.Filters.(string); ok && s.Topic != string(ChainlinkPrice) {
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+				filters = parsed
+			}
+		}
+		payload["filters"] = filters
+	}
+	if s.ClobAuth != nil {
+		payload["clob_auth"] = s.ClobAuth
+	}
+	return json.Marshal(payload)
+}
+
 // SubscriptionRequest is the top-level RTDS subscribe/unsubscribe payload.
 type SubscriptionRequest struct {
 	Action        SubscriptionAction `json:"action"`

@@ -67,6 +67,7 @@ import (
 
 	"github.com/GoPolymarket/polymarket-go-sdk"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/clobtypes"
 )
 
@@ -86,12 +87,10 @@ func main() {
 	}
 
 	// 3. Create Client
-	client := polymarket.NewClient(
-		polymarket.WithAuth(signer, creds),
-	)
+	client := polymarket.NewClient().WithAuth(signer, creds)
 
 	// 4. Check System Status
-	status, _ := client.CLOB().Health(context.Background())
+	status, _ := client.CLOB.Health(context.Background())
 	fmt.Println("System Status:", status)
 }
 ```
@@ -104,8 +103,8 @@ The SDK handles the complex EIP-712 hashing and signing automatically.
 ctx := context.Background()
 
 // Create an order builder
-resp, err := client.CLOB().CreateOrder(ctx, 
-    clobtypes.NewOrderBuilder(client.CLOB(), signer).
+resp, err := client.CLOB.CreateOrder(ctx,
+    clob.NewOrderBuilder(client.CLOB, signer).
         TokenID("TOKEN_ID_HERE").
         Side("BUY").
         Price(0.50).
@@ -123,8 +122,8 @@ fmt.Printf("Order Placed: %s\n", resp.ID)
 ### 3. Stream Market Data (WebSocket)
 
 ```go
-wsClient := client.CLOB().WS()
-defers wsClient.Close()
+wsClient := client.CLOB.WS()
+defer wsClient.Close()
 
 // Subscribe to price updates
 sub, err := wsClient.SubscribePrices(ctx, []string{"TOKEN_ID_HERE"})
@@ -143,7 +142,7 @@ Forget about manually handling `next_cursor`.
 
 ```go
 // Automatically iterates through all pages
-allMarkets, err := client.CLOB().MarketsAll(ctx, &clobtypes.MarketsRequest{
+allMarkets, err := client.CLOB.MarketsAll(ctx, &clobtypes.MarketsRequest{
     Active: boolPtr(true),
 })
 if err != nil {
@@ -151,6 +150,97 @@ if err != nil {
 }
 fmt.Printf("Fetched %d active markets\n", len(allMarkets))
 ```
+
+### 5. Balance/Allowance & Rewards (Signature Type)
+
+Balance/allowance requests now support `asset_type`, `token_id`, and `signature_type` (with `asset` kept for compatibility). Responses return an `allowances` map keyed by spender address.
+
+```go
+// Set a default signature type for balance/rewards queries (0=EOA, 1=Proxy, 2=Safe)
+client = client.WithSignatureType(auth.SignatureProxy)
+
+bal, err := client.CLOB.BalanceAllowance(ctx, &clobtypes.BalanceAllowanceRequest{
+    AssetType: clobtypes.AssetTypeConditional,
+    TokenID:   "TOKEN_ID_HERE",
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Balance:", bal.Balance)
+fmt.Println("Allowances:", bal.Allowances)
+
+rewards, err := client.CLOB.UserRewardsByMarket(ctx, &clobtypes.UserRewardsByMarketRequest{
+    Date:          "2026-01-01",
+    OrderBy:       "date",
+    NoCompetition: true,
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("User rewards: %d entries\n", len(rewards))
+```
+
+### 6. Client Defaults (Signature / Nonce / Funder / Salt)
+
+You can set client-level defaults that apply to order signing and API key creation:
+- `WithSignatureType` applies to order signing and balance/rewards queries.
+- `WithAuthNonce` becomes the default nonce for create/derive API key calls.
+- `WithFunder` sets a maker address override (Proxy/Safe flows).
+- `WithSaltGenerator` customizes order salt generation.
+
+```go
+client := polymarket.NewClient()
+
+authClient := client.CLOB.
+    WithAuth(signer, nil).
+    WithSignatureType(auth.SignatureProxy).
+    WithAuthNonce(1).
+    WithSaltGenerator(func() (*big.Int, error) {
+        return big.NewInt(42), nil
+    })
+
+// Optional: explicit funder address for proxy/safe signatures
+authClient = authClient.WithFunder(common.HexToAddress("0xFunder..."))
+
+builder := clob.NewOrderBuilder(authClient, signer).
+    TokenID("TOKEN_ID_HERE").
+    Side("BUY").
+    Price(0.5).
+    Size(10).
+    TickSize("0.01").
+    FeeRateBps(0)
+
+signable, _ := builder.BuildSignableWithContext(ctx)
+fmt.Println("Maker:", signable.Order.Maker.Hex())
+```
+
+See `examples/client_defaults` for a runnable version.
+
+### 7. StreamData (Generic Pagination Helper)
+
+Use `clob.StreamData` to iterate through any cursor-based endpoint without writing a custom loop:
+
+```go
+stream := clob.StreamData(ctx, func(ctx context.Context, cursor string) ([]clobtypes.Market, string, error) {
+    resp, err := client.CLOB.Markets(ctx, &clobtypes.MarketsRequest{
+        Limit:  3,
+        Cursor: cursor,
+    })
+    if err != nil {
+        return nil, "", err
+    }
+    return resp.Data, resp.NextCursor, nil
+})
+
+for res := range stream {
+    if res.Err != nil {
+        log.Fatal(res.Err)
+    }
+    fmt.Println(res.Item.Question)
+}
+```
+
+See `examples/stream_data` for a runnable version.
 
 ## 🛡️ Best Practices
 
@@ -164,7 +254,7 @@ import (
     "github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/cloberrors"
 )
 
-resp, err := client.CLOB().CreateOrder(ctx, order)
+resp, err := client.CLOB.CreateOrder(ctx, order)
 if err != nil {
     if errors.Is(err, cloberrors.ErrInsufficientFunds) {
         fmt.Println("Please deposit more USDC")
@@ -198,6 +288,12 @@ client := polymarket.NewClient(
         },
     }),
 )
+```
+
+If you need to switch an already-authenticated client into builder attribution mode (and restart heartbeats with the new headers), use `PromoteToBuilder`:
+
+```go
+builderClient := authClient.PromoteToBuilder(myBuilderConfig)
 ```
 
 ## 🗺 Roadmap

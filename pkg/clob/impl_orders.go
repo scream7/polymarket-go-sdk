@@ -48,15 +48,15 @@ func (c *clientImpl) CreateOrderFromSignable(ctx context.Context, order *clobtyp
 }
 
 func (c *clientImpl) signOrder(order *clobtypes.Order) (*clobtypes.SignedOrder, error) {
-	return signOrderWithCreds(c.signer, c.apiKey, order)
+	return signOrderWithCreds(c.signer, c.apiKey, order, &c.signatureType, c.funder, c.saltGenerator)
 }
 
 // SignOrder builds an EIP-712 signature for the given order without posting it.
 func SignOrder(signer auth.Signer, apiKey *auth.APIKey, order *clobtypes.Order) (*clobtypes.SignedOrder, error) {
-	return signOrderWithCreds(signer, apiKey, order)
+	return signOrderWithCreds(signer, apiKey, order, nil, nil, nil)
 }
 
-func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *clobtypes.Order) (*clobtypes.SignedOrder, error) {
+func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *clobtypes.Order, sigType *auth.SignatureType, funder *types.Address, saltGen SaltGenerator) (*clobtypes.SignedOrder, error) {
 	if signer == nil {
 		return nil, auth.ErrMissingSigner
 	}
@@ -65,6 +65,33 @@ func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *clobtype
 	}
 	if order == nil {
 		return nil, fmt.Errorf("order is required")
+	}
+
+	sigTypeVal := int(auth.SignatureEOA)
+	if order.SignatureType != nil {
+		sigTypeVal = *order.SignatureType
+	} else if sigType != nil {
+		sigTypeVal = int(*sigType)
+		val := sigTypeVal
+		order.SignatureType = &val
+	}
+
+	if order.Maker == (types.Address{}) {
+		if funder != nil {
+			if sigTypeVal == int(auth.SignatureEOA) {
+				return nil, fmt.Errorf("funder requires non-EOA signature type")
+			}
+			if *funder == (types.Address{}) {
+				return nil, fmt.Errorf("funder cannot be zero address")
+			}
+			order.Maker = *funder
+		} else {
+			maker, err := deriveMakerFromSignature(signer, sigTypeVal)
+			if err != nil {
+				return nil, err
+			}
+			order.Maker = maker
+		}
 	}
 
 	domain := &apitypes.TypedDataDomain{
@@ -103,16 +130,17 @@ func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *clobtype
 	}
 
 	if order.Salt.Int == nil || order.Salt.Int.Sign() == 0 {
-		salt, err := generateSalt()
+		var salt *big.Int
+		var err error
+		if saltGen != nil {
+			salt, err = saltGen()
+		} else {
+			salt, err = generateSalt()
+		}
 		if err != nil {
 			return nil, err
 		}
 		order.Salt = types.U256{Int: salt}
-	}
-
-	sigType := 0
-	if order.SignatureType != nil {
-		sigType = *order.SignatureType
 	}
 
 	expiration := big.NewInt(0)
@@ -132,7 +160,7 @@ func signOrderWithCreds(signer auth.Signer, apiKey *auth.APIKey, order *clobtype
 		"nonce":         (*math.HexOrDecimal256)(order.Nonce.Int),
 		"feeRateBps":    (*math.HexOrDecimal256)(order.FeeRateBps.BigInt()),
 		"side":          (*math.HexOrDecimal256)(big.NewInt(int64(sideInt))),
-		"signatureType": (*math.HexOrDecimal256)(big.NewInt(int64(sigType))),
+		"signatureType": (*math.HexOrDecimal256)(big.NewInt(int64(sigTypeVal))),
 	}
 
 	sig, err := signer.SignTypedData(domain, typesDef, message, "clobtypes.Order")
@@ -174,13 +202,33 @@ func (c *clientImpl) PostOrders(ctx context.Context, req *clobtypes.SignedOrders
 
 func (c *clientImpl) CancelOrder(ctx context.Context, req *clobtypes.CancelOrderRequest) (clobtypes.CancelResponse, error) {
 	var resp clobtypes.CancelResponse
-	err := c.httpClient.Delete(ctx, "/order", req, &resp)
+	var body interface{}
+	if req != nil {
+		orderID := req.OrderID
+		if orderID == "" {
+			orderID = req.ID
+		}
+		if orderID != "" {
+			body = map[string]string{"orderId": orderID}
+		}
+	}
+	err := c.httpClient.Delete(ctx, "/order", body, &resp)
 	return resp, mapError(err)
 }
 
 func (c *clientImpl) CancelOrders(ctx context.Context, req *clobtypes.CancelOrdersRequest) (clobtypes.CancelResponse, error) {
 	var resp clobtypes.CancelResponse
-	err := c.httpClient.Delete(ctx, "/orders", req, &resp)
+	var body interface{}
+	if req != nil {
+		ids := req.OrderIDs
+		if len(ids) == 0 {
+			ids = req.IDs
+		}
+		if len(ids) > 0 {
+			body = ids
+		}
+	}
+	err := c.httpClient.Delete(ctx, "/orders", body, &resp)
 	return resp, mapError(err)
 }
 
@@ -192,7 +240,24 @@ func (c *clientImpl) CancelAll(ctx context.Context) (clobtypes.CancelAllResponse
 
 func (c *clientImpl) CancelMarketOrders(ctx context.Context, req *clobtypes.CancelMarketOrdersRequest) (clobtypes.CancelMarketOrdersResponse, error) {
 	var resp clobtypes.CancelMarketOrdersResponse
-	err := c.httpClient.Delete(ctx, "/cancel-market-orders", req, &resp)
+	var body interface{}
+	if req != nil {
+		market := req.Market
+		if market == "" {
+			market = req.MarketID
+		}
+		payload := map[string]string{}
+		if market != "" {
+			payload["market"] = market
+		}
+		if req.AssetID != "" {
+			payload["asset_id"] = req.AssetID
+		}
+		if len(payload) > 0 {
+			body = payload
+		}
+	}
+	err := c.httpClient.Delete(ctx, "/cancel-market-orders", body, &resp)
 	return resp, mapError(err)
 }
 

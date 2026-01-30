@@ -31,11 +31,14 @@ type OrderBuilder struct {
 
 	// Optional overrides
 	maker         *common.Address
+	funder        *common.Address
 	taker         *common.Address
 	nonce         *big.Int
 	expiration    *big.Int
 	signatureType *auth.SignatureType
 	postOnly      *bool
+
+	saltGenerator SaltGenerator
 
 	amount *marketAmount
 }
@@ -55,12 +58,25 @@ const (
 	lotSizeScale = int32(2)
 )
 
+// SaltGenerator generates salts for new orders.
+type SaltGenerator func() (*big.Int, error)
+
 // NewOrderBuilder creates a new order builder.
 func NewOrderBuilder(client Client, signer auth.Signer) *OrderBuilder {
-	return &OrderBuilder{
+	builder := &OrderBuilder{
 		client: client,
 		signer: signer,
 	}
+	if provider, ok := client.(interface{ orderDefaults() orderDefaults }); ok {
+		defaults := provider.orderDefaults()
+		sigType := defaults.signatureType
+		builder.signatureType = &sigType
+		if defaults.funder != nil {
+			builder.funder = defaults.funder
+		}
+		builder.saltGenerator = defaults.saltGenerator
+	}
+	return builder
 }
 
 // TokenID sets the token ID to trade.
@@ -331,33 +347,20 @@ func (b *OrderBuilder) BuildMarketWithContext(ctx context.Context) (*clobtypes.S
 	var maker common.Address
 	if b.maker != nil {
 		maker = *b.maker
+	} else if b.funder != nil {
+		if sigType == int(auth.SignatureEOA) {
+			return nil, fmt.Errorf("funder requires non-EOA signature type")
+		}
+		if *b.funder == (common.Address{}) {
+			return nil, fmt.Errorf("funder cannot be zero address")
+		}
+		maker = *b.funder
 	} else {
-		chainID := int64(0)
-		if b.signer != nil && b.signer.ChainID() != nil {
-			chainID = b.signer.ChainID().Int64()
+		derived, err := deriveMakerFromSignature(b.signer, sigType)
+		if err != nil {
+			return nil, err
 		}
-		switch sigType {
-		case int(auth.SignatureProxy):
-			proxy, err := auth.DeriveProxyWalletForChain(b.signer.Address(), chainID)
-			if err != nil && chainID == 0 {
-				proxy, err = auth.DeriveProxyWallet(b.signer.Address())
-			}
-			if err != nil {
-				return nil, fmt.Errorf("failed to derive proxy wallet: %w", err)
-			}
-			maker = proxy
-		case int(auth.SignatureGnosisSafe):
-			safe, err := auth.DeriveSafeWalletForChain(b.signer.Address(), chainID)
-			if err != nil && chainID == 0 {
-				safe, err = auth.DeriveSafeWallet(b.signer.Address())
-			}
-			if err != nil {
-				return nil, fmt.Errorf("failed to derive safe wallet: %w", err)
-			}
-			maker = safe
-		default:
-			maker = b.signer.Address()
-		}
+		maker = derived
 	}
 
 	taker := common.HexToAddress("0x0000000000000000000000000000000000000000")
@@ -370,7 +373,7 @@ func (b *OrderBuilder) BuildMarketWithContext(ctx context.Context) (*clobtypes.S
 		nonce = b.nonce
 	}
 
-	salt, err := generateSalt()
+	salt, err := b.generateSalt()
 	if err != nil {
 		return nil, err
 	}
@@ -468,33 +471,20 @@ func (b *OrderBuilder) buildLimit(ctx context.Context) (*clobtypes.Order, error)
 	var maker common.Address
 	if b.maker != nil {
 		maker = *b.maker
+	} else if b.funder != nil {
+		if sigType == int(auth.SignatureEOA) {
+			return nil, fmt.Errorf("funder requires non-EOA signature type")
+		}
+		if *b.funder == (common.Address{}) {
+			return nil, fmt.Errorf("funder cannot be zero address")
+		}
+		maker = *b.funder
 	} else {
-		chainID := int64(0)
-		if b.signer != nil && b.signer.ChainID() != nil {
-			chainID = b.signer.ChainID().Int64()
+		derived, err := deriveMakerFromSignature(b.signer, sigType)
+		if err != nil {
+			return nil, err
 		}
-		switch sigType {
-		case int(auth.SignatureProxy):
-			proxy, err := auth.DeriveProxyWalletForChain(b.signer.Address(), chainID)
-			if err != nil && chainID == 0 {
-				proxy, err = auth.DeriveProxyWallet(b.signer.Address())
-			}
-			if err != nil {
-				return nil, fmt.Errorf("failed to derive proxy wallet: %w", err)
-			}
-			maker = proxy
-		case int(auth.SignatureGnosisSafe):
-			safe, err := auth.DeriveSafeWalletForChain(b.signer.Address(), chainID)
-			if err != nil && chainID == 0 {
-				safe, err = auth.DeriveSafeWallet(b.signer.Address())
-			}
-			if err != nil {
-				return nil, fmt.Errorf("failed to derive safe wallet: %w", err)
-			}
-			maker = safe
-		default:
-			maker = b.signer.Address()
-		}
+		maker = derived
 	}
 
 	taker := common.HexToAddress("0x0000000000000000000000000000000000000000")
@@ -507,7 +497,7 @@ func (b *OrderBuilder) buildLimit(ctx context.Context) (*clobtypes.Order, error)
 		nonce = b.nonce
 	}
 
-	salt, err := generateSalt()
+	salt, err := b.generateSalt()
 	if err != nil {
 		return nil, err
 	}
@@ -736,6 +726,45 @@ func generateSalt() (*big.Int, error) {
 	raw := binary.BigEndian.Uint64(buf[:])
 	raw &= (1 << 53) - 1
 	return new(big.Int).SetUint64(raw), nil
+}
+
+func (b *OrderBuilder) generateSalt() (*big.Int, error) {
+	if b.saltGenerator != nil {
+		return b.saltGenerator()
+	}
+	return generateSalt()
+}
+
+func deriveMakerFromSignature(signer auth.Signer, sigType int) (common.Address, error) {
+	if signer == nil {
+		return common.Address{}, fmt.Errorf("signer is required")
+	}
+	chainID := int64(0)
+	if signer.ChainID() != nil {
+		chainID = signer.ChainID().Int64()
+	}
+	switch sigType {
+	case int(auth.SignatureProxy):
+		proxy, err := auth.DeriveProxyWalletForChain(signer.Address(), chainID)
+		if err != nil && chainID == 0 {
+			proxy, err = auth.DeriveProxyWallet(signer.Address())
+		}
+		if err != nil {
+			return common.Address{}, fmt.Errorf("failed to derive proxy wallet: %w", err)
+		}
+		return proxy, nil
+	case int(auth.SignatureGnosisSafe):
+		safe, err := auth.DeriveSafeWalletForChain(signer.Address(), chainID)
+		if err != nil && chainID == 0 {
+			safe, err = auth.DeriveSafeWallet(signer.Address())
+		}
+		if err != nil {
+			return common.Address{}, fmt.Errorf("failed to derive safe wallet: %w", err)
+		}
+		return safe, nil
+	default:
+		return signer.Address(), nil
+	}
 }
 
 // UseProxy sets the order to use the user's Proxy Wallet.

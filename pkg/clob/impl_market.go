@@ -114,11 +114,16 @@ func (c *clientImpl) OrderBook(ctx context.Context, req *clobtypes.BookRequest) 
 
 func (c *clientImpl) OrderBooks(ctx context.Context, req *clobtypes.BooksRequest) (clobtypes.OrderBooksResponse, error) {
 	var resp clobtypes.OrderBooksResponse
-	var body []map[string]string
+	var body interface{}
 	if req != nil {
-		body = make([]map[string]string, 0, len(req.TokenIDs))
-		for _, id := range req.TokenIDs {
-			body = append(body, map[string]string{"token_id": id})
+		if len(req.Requests) > 0 {
+			body = req.Requests
+		} else if len(req.TokenIDs) > 0 {
+			requests := make([]clobtypes.BookRequest, 0, len(req.TokenIDs))
+			for _, id := range req.TokenIDs {
+				requests = append(requests, clobtypes.BookRequest{TokenID: id})
+			}
+			body = requests
 		}
 	}
 	err := c.httpClient.Post(ctx, "/books", body, &resp)
@@ -163,15 +168,16 @@ func (c *clientImpl) Price(ctx context.Context, req *clobtypes.PriceRequest) (cl
 
 func (c *clientImpl) Prices(ctx context.Context, req *clobtypes.PricesRequest) (clobtypes.PricesResponse, error) {
 	var resp clobtypes.PricesResponse
-	var body []map[string]string
+	var body interface{}
 	if req != nil {
-		body = make([]map[string]string, 0, len(req.TokenIDs))
-		for _, id := range req.TokenIDs {
-			entry := map[string]string{"token_id": id}
-			if req.Side != "" {
-				entry["side"] = req.Side
+		if len(req.Requests) > 0 {
+			body = req.Requests
+		} else if len(req.TokenIDs) > 0 {
+			requests := make([]clobtypes.PriceRequest, 0, len(req.TokenIDs))
+			for _, id := range req.TokenIDs {
+				requests = append(requests, clobtypes.PriceRequest{TokenID: id, Side: req.Side})
 			}
-			body = append(body, entry)
+			body = requests
 		}
 	}
 	err := c.httpClient.Post(ctx, "/prices", body, &resp)
@@ -188,6 +194,9 @@ func (c *clientImpl) Spread(ctx context.Context, req *clobtypes.SpreadRequest) (
 	q := url.Values{}
 	if req != nil {
 		q.Set("token_id", req.TokenID)
+		if req.Side != "" {
+			q.Set("side", req.Side)
+		}
 	}
 	var resp clobtypes.SpreadResponse
 	err := c.httpClient.Get(ctx, "/spread", q, &resp)
@@ -196,11 +205,16 @@ func (c *clientImpl) Spread(ctx context.Context, req *clobtypes.SpreadRequest) (
 
 func (c *clientImpl) Spreads(ctx context.Context, req *clobtypes.SpreadsRequest) (clobtypes.SpreadsResponse, error) {
 	var resp clobtypes.SpreadsResponse
-	var body []map[string]string
+	var body interface{}
 	if req != nil {
-		body = make([]map[string]string, 0, len(req.TokenIDs))
-		for _, id := range req.TokenIDs {
-			body = append(body, map[string]string{"token_id": id})
+		if len(req.Requests) > 0 {
+			body = req.Requests
+		} else if len(req.TokenIDs) > 0 {
+			requests := make([]clobtypes.SpreadRequest, 0, len(req.TokenIDs))
+			for _, id := range req.TokenIDs {
+				requests = append(requests, clobtypes.SpreadRequest{TokenID: id})
+			}
+			body = requests
 		}
 	}
 	err := c.httpClient.Post(ctx, "/spreads", body, &resp)
@@ -316,15 +330,32 @@ func (c *clientImpl) FeeRate(ctx context.Context, req *clobtypes.FeeRateRequest)
 func (c *clientImpl) PricesHistory(ctx context.Context, req *clobtypes.PricesHistoryRequest) (clobtypes.PricesHistoryResponse, error) {
 	q := url.Values{}
 	if req != nil {
-		q.Set("token_id", req.TokenID)
-		if req.StartTs > 0 {
-			q.Set("start_ts", strconv.FormatInt(req.StartTs, 10))
+		if req.Market != "" {
+			q.Set("market", req.Market)
+		} else if req.TokenID != "" {
+			q.Set("token_id", req.TokenID)
 		}
-		if req.EndTs > 0 {
-			q.Set("end_ts", strconv.FormatInt(req.EndTs, 10))
+
+		interval := ""
+		if req.Interval != "" {
+			interval = string(req.Interval)
+		} else if req.Resolution != "" {
+			interval = req.Resolution
 		}
-		if req.Resolution != "" {
-			q.Set("resolution", req.Resolution)
+
+		if interval != "" {
+			q.Set("interval", interval)
+		} else {
+			if req.StartTs > 0 {
+				q.Set("start_ts", strconv.FormatInt(req.StartTs, 10))
+			}
+			if req.EndTs > 0 {
+				q.Set("end_ts", strconv.FormatInt(req.EndTs, 10))
+			}
+		}
+
+		if req.Fidelity > 0 {
+			q.Set("fidelity", strconv.Itoa(req.Fidelity))
 		}
 	}
 	var resp clobtypes.PricesHistoryResponse

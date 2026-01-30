@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
 	"github.com/gorilla/websocket"
 )
 
@@ -119,6 +120,9 @@ type clientImpl struct {
 	subs       map[string]*subscriptionEntry
 	subsByKey  map[string]map[string]*subscriptionEntry
 	nextSubID  uint64
+
+	authMu sync.RWMutex
+	auth   *auth.APIKey
 }
 
 func NewClient(url string) (Client, error) {
@@ -160,6 +164,20 @@ func NewClient(url string) (Client, error) {
 	go c.pingLoop()
 
 	return c, nil
+}
+
+func (c *clientImpl) Authenticate(apiKey *auth.APIKey) Client {
+	c.authMu.Lock()
+	c.auth = apiKey
+	c.authMu.Unlock()
+	return c
+}
+
+func (c *clientImpl) Deauthenticate() Client {
+	c.authMu.Lock()
+	c.auth = nil
+	c.authMu.Unlock()
+	return c
 }
 
 func (c *clientImpl) connect() error {
@@ -358,6 +376,18 @@ func (c *clientImpl) SubscribeCommentsStream(ctx context.Context, req *CommentFi
 		}
 		if req.Filters != nil {
 			sub.Filters = req.Filters
+		}
+	}
+	if sub.ClobAuth == nil {
+		c.authMu.RLock()
+		authCopy := c.auth
+		c.authMu.RUnlock()
+		if authCopy != nil {
+			sub.ClobAuth = &ClobAuth{
+				Key:        authCopy.Key,
+				Secret:     authCopy.Secret,
+				Passphrase: authCopy.Passphrase,
+			}
 		}
 	}
 	rawStream, err := c.subscribeRawStream(sub, nil)

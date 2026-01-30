@@ -1,6 +1,8 @@
 package polymarket
 
 import (
+	"net/http"
+
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/bridge"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/clob"
@@ -23,6 +25,8 @@ type Client struct {
 	Bridge bridge.Client
 	RTDS   rtds.Client
 	CTF    ctf.Client
+
+	builderCfg *auth.BuilderConfig
 }
 
 // NewClient creates a new root client with optional overrides.
@@ -30,39 +34,53 @@ func NewClient(opts ...Option) *Client {
 	// 1. Initialize with default configuration
 	c := &Client{Config: DefaultConfig()}
 
-	// 2. Initialize default transports
-	// We need these base transports to be ready so Options can modify them
-	clobTransport := transport.NewClient(c.Config.HTTPClient, c.Config.BaseURLs.CLOB)
-	clobTransport.SetUserAgent(c.Config.UserAgent)
-	clobTransport.SetUseServerTime(c.Config.UseServerTime)
-
-	gammaTransport := transport.NewClient(c.Config.HTTPClient, c.Config.BaseURLs.Gamma)
-	gammaTransport.SetUserAgent(c.Config.UserAgent)
-
-	dataTransport := transport.NewClient(c.Config.HTTPClient, c.Config.BaseURLs.Data)
-	dataTransport.SetUserAgent(c.Config.UserAgent)
-
-	bridgeTransport := transport.NewClient(c.Config.HTTPClient, c.Config.BaseURLs.Bridge)
-	bridgeTransport.SetUserAgent(c.Config.UserAgent)
-
-	// 3. Initialize default clients
-	c.CLOB = clob.NewClientWithGeoblock(clobTransport, c.Config.BaseURLs.Geoblock)
-	c.Gamma = gamma.NewClient(gammaTransport)
-	c.Data = data.NewClient(dataTransport)
-	c.Bridge = bridge.NewClient(bridgeTransport)
-	c.CTF = ctf.NewClient()
-	
-	// Default WS URL
-	wsURL := c.Config.BaseURLs.CLOBWS
-	if wsURL == "" {
-		wsURL = ws.ProdBaseURL
-	}
-	c.CLOBWS, _ = ws.NewClient(wsURL, nil, nil)
-
-	// 4. Apply Options (Overrides)
-	// Now that clients exist, options like WithBuilderAttribution can modify them
+	// 2. Apply Options (Config overrides)
 	for _, opt := range opts {
 		opt(c)
+	}
+
+	// 3. Ensure a default HTTP client with timeout if none was provided.
+	if c.Config.HTTPClient == nil && c.Config.Timeout > 0 {
+		c.Config.HTTPClient = &http.Client{Timeout: c.Config.Timeout}
+	}
+
+	// 4. Initialize default transports and clients (if not overridden)
+	if c.CLOB == nil {
+		clobTransport := transport.NewClient(c.Config.HTTPClient, c.Config.BaseURLs.CLOB)
+		clobTransport.SetUserAgent(c.Config.UserAgent)
+		clobTransport.SetUseServerTime(c.Config.UseServerTime)
+		c.CLOB = clob.NewClientWithGeoblock(clobTransport, c.Config.BaseURLs.Geoblock)
+	}
+	if c.Gamma == nil {
+		gammaTransport := transport.NewClient(c.Config.HTTPClient, c.Config.BaseURLs.Gamma)
+		gammaTransport.SetUserAgent(c.Config.UserAgent)
+		c.Gamma = gamma.NewClient(gammaTransport)
+	}
+	if c.Data == nil {
+		dataTransport := transport.NewClient(c.Config.HTTPClient, c.Config.BaseURLs.Data)
+		dataTransport.SetUserAgent(c.Config.UserAgent)
+		c.Data = data.NewClient(dataTransport)
+	}
+	if c.Bridge == nil {
+		bridgeTransport := transport.NewClient(c.Config.HTTPClient, c.Config.BaseURLs.Bridge)
+		bridgeTransport.SetUserAgent(c.Config.UserAgent)
+		c.Bridge = bridge.NewClient(bridgeTransport)
+	}
+	if c.CTF == nil {
+		c.CTF = ctf.NewClient()
+	}
+	if c.CLOBWS == nil {
+		// Default WS URL
+		wsURL := c.Config.BaseURLs.CLOBWS
+		if wsURL == "" {
+			wsURL = ws.ProdBaseURL
+		}
+		c.CLOBWS, _ = ws.NewClient(wsURL, nil, nil)
+	}
+
+	// 5. Apply builder attribution if configured
+	if c.builderCfg != nil && c.CLOB != nil {
+		c.CLOB = c.CLOB.WithBuilderConfig(c.builderCfg)
 	}
 
 	return c
@@ -72,6 +90,9 @@ func NewClient(opts ...Option) *Client {
 func (c *Client) WithAuth(signer auth.Signer, apiKey *auth.APIKey) *Client {
 	if c.CLOB != nil {
 		c.CLOB = c.CLOB.WithAuth(signer, apiKey)
+	}
+	if c.CLOBWS != nil {
+		c.CLOBWS = c.CLOBWS.Authenticate(signer, apiKey)
 	}
 	return c
 }

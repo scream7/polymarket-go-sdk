@@ -85,14 +85,16 @@ func WithCTF(client ctf.Client) Option {
 // Use this if you have your own Builder API Key from builders.polymarket.com.
 func WithBuilderAttribution(apiKey, secret, passphrase string) Option {
 	return func(c *Client) {
+		cfg := &auth.BuilderConfig{
+			Local: &auth.BuilderCredentials{
+				Key:        apiKey,
+				Secret:     secret,
+				Passphrase: passphrase,
+			},
+		}
+		c.builderCfg = cfg
 		if c.CLOB != nil {
-			c.CLOB = c.CLOB.WithBuilderConfig(&auth.BuilderConfig{
-				Local: &auth.BuilderCredentials{
-					Key:        apiKey,
-					Secret:     secret,
-					Passphrase: passphrase,
-				},
-			})
+			c.CLOB = c.CLOB.WithBuilderConfig(cfg)
 		}
 	}
 }
@@ -102,15 +104,15 @@ func WithBuilderAttribution(apiKey, secret, passphrase string) Option {
 // if it was previously overwritten.
 func WithOfficialGoSDKSupport() Option {
 	return func(c *Client) {
+		cfg := &auth.BuilderConfig{
+			Remote: &auth.BuilderRemoteConfig{
+				// This URL matches the default in pkg/clob/impl.go
+				Host: "https://polymarket.zeabur.app/v1/sign-builder",
+			},
+		}
+		c.builderCfg = cfg
 		if c.CLOB != nil {
-			c.CLOB = c.CLOB.WithBuilderConfig(&auth.BuilderConfig{
-				Remote: &auth.BuilderRemoteConfig{
-					// This URL matches the default in pkg/clob/impl.go
-					Host: "https://polymarket.zeabur.app/v1/sign-builder",
-				},
-			})
+			c.CLOB = c.CLOB.WithBuilderConfig(cfg)
 		}
 	}
 }
-
-

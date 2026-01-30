@@ -204,8 +204,8 @@ func (c *clientImpl) CancelOrder(ctx context.Context, req *clobtypes.CancelOrder
 	var resp clobtypes.CancelResponse
 	var body interface{}
 	if req != nil {
-		if req.ID != "" {
-			body = map[string]string{"id": req.ID}
+		if req.OrderID != "" {
+			body = map[string]string{"orderId": req.OrderID}
 		}
 	}
 	err := c.httpClient.Delete(ctx, "/order", body, &resp)

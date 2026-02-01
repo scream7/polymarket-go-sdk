@@ -2,11 +2,15 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 )
 
 // MockDoer implements Doer for testing
@@ -97,6 +101,72 @@ func TestClient_Call_Retry(t *testing.T) {
 	})
 }
 
+func TestClient_Call_CircuitBreakerIgnoresClientErrors(t *testing.T) {
+	t.Run("4xx does not trip breaker", func(t *testing.T) {
+		mock := &MockDoer{
+			DoFunc: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: 400,
+					Body:       io.NopCloser(strings.NewReader(`{"message":"bad request"}`)),
+				}, nil
+			},
+		}
+
+		cb := NewCircuitBreaker(CircuitBreakerConfig{
+			MaxFailures:     1,
+			ResetTimeout:    time.Second,
+			HalfOpenMaxReqs: 1,
+		})
+		client := NewClient(mock, "http://example.com")
+		client.SetCircuitBreaker(cb)
+
+		err := client.Call(context.Background(), "GET", "/bad", nil, nil, nil, nil)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		var apiErr *types.Error
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("expected *types.Error, got %T", err)
+		}
+		if cb.Failures() != 0 {
+			t.Errorf("Failures() = %d, want 0", cb.Failures())
+		}
+		if cb.State() != StateClosed {
+			t.Errorf("State() = %v, want %v", cb.State(), StateClosed)
+		}
+	})
+
+	t.Run("context cancellation does not trip breaker", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		mock := &MockDoer{
+			DoFunc: func(req *http.Request) (*http.Response, error) {
+				return nil, ctx.Err()
+			},
+		}
+
+		cb := NewCircuitBreaker(CircuitBreakerConfig{
+			MaxFailures:     1,
+			ResetTimeout:    time.Second,
+			HalfOpenMaxReqs: 1,
+		})
+		client := NewClient(mock, "http://example.com")
+		client.SetCircuitBreaker(cb)
+
+		err := client.Call(ctx, "GET", "/canceled", nil, nil, nil, nil)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+		if cb.Failures() != 0 {
+			t.Errorf("Failures() = %d, want 0", cb.Failures())
+		}
+		if cb.State() != StateClosed {
+			t.Errorf("State() = %v, want %v", cb.State(), StateClosed)
+		}
+	})
+}
+
 func TestClientHelpers(t *testing.T) {
 	ctx := context.Background()
 
@@ -138,6 +208,43 @@ func TestClientHelpers(t *testing.T) {
 		clone := client.CloneWithBaseURL("http://new.com")
 		if clone.baseURL != "http://new.com" {
 			t.Errorf("clone failed")
+		}
+	})
+
+	t.Run("Clone preserves resilience settings", func(t *testing.T) {
+		// Create client with rate limiter and circuit breaker
+		client := NewClientWithResilience(http.DefaultClient, "http://example.com", 10, DefaultCircuitBreakerConfig())
+		client.SetUserAgent("test-agent")
+		client.SetUseServerTime(true)
+
+		// Clone with new base URL
+		clone := client.CloneWithBaseURL("http://new.com")
+
+		// Verify base URL changed
+		if clone.baseURL != "http://new.com" {
+			t.Errorf("expected baseURL http://new.com, got %s", clone.baseURL)
+		}
+
+		// Verify resilience settings preserved
+		if clone.rateLimiter == nil {
+			t.Error("rate limiter not preserved in clone")
+		}
+		if clone.circuitBreaker == nil {
+			t.Error("circuit breaker not preserved in clone")
+		}
+		if clone.rateLimiter != client.rateLimiter {
+			t.Error("rate limiter should be shared between original and clone")
+		}
+		if clone.circuitBreaker != client.circuitBreaker {
+			t.Error("circuit breaker should be shared between original and clone")
+		}
+
+		// Verify other settings preserved
+		if clone.userAgent != client.userAgent {
+			t.Errorf("userAgent not preserved: expected %s, got %s", client.userAgent, clone.userAgent)
+		}
+		if clone.useServerTime != client.useServerTime {
+			t.Error("useServerTime not preserved")
 		}
 	})
 

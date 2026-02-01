@@ -248,19 +248,19 @@ See `examples/stream_data` for a runnable version.
 
 ### 1. Structured Error Handling
 
-The SDK provides typed errors in `pkg/clob/cloberrors` to help you handle trading failures programmatically.
+The SDK provides typed errors in `pkg/errors` to help you handle trading failures programmatically.
 
 ```go
 import (
     "errors"
-    "github.com/GoPolymarket/polymarket-go-sdk/pkg/clob/cloberrors"
+    sdkerrors "github.com/GoPolymarket/polymarket-go-sdk/pkg/errors"
 )
 
 resp, err := client.CLOB.CreateOrder(ctx, order)
 if err != nil {
-    if errors.Is(err, cloberrors.ErrInsufficientFunds) {
+    if errors.Is(err, sdkerrors.ErrInsufficientFunds) {
         fmt.Println("Please deposit more USDC")
-    } else if errors.Is(err, cloberrors.ErrRateLimitExceeded) {
+    } else if errors.Is(err, sdkerrors.ErrRateLimitExceeded) {
         fmt.Println("Backing off due to rate limits...")
     }
 }

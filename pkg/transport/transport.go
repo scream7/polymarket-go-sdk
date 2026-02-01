@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -35,13 +37,15 @@ type Doer interface {
 // It adds Polymarket-specific functionality like automatic HMAC signing
 // and transparent request retries for ephemeral server errors.
 type Client struct {
-	httpClient    Doer
-	baseURL       string
-	userAgent     string
-	signer        auth.Signer
-	apiKey        *auth.APIKey
-	builder       *auth.BuilderConfig
-	useServerTime bool
+	httpClient     Doer
+	baseURL        string
+	userAgent      string
+	signer         auth.Signer
+	apiKey         *auth.APIKey
+	builder        *auth.BuilderConfig
+	useServerTime  bool
+	rateLimiter    *RateLimiter
+	circuitBreaker *CircuitBreaker
 }
 
 // NewClient creates a new transport client.
@@ -60,8 +64,43 @@ func NewClient(httpClient Doer, baseURL string) *Client {
 	}
 }
 
+// NewClientWithRateLimiter creates a new transport client with rate limiting enabled.
+func NewClientWithRateLimiter(httpClient Doer, baseURL string, requestsPerSecond int) *Client {
+	client := NewClient(httpClient, baseURL)
+	client.rateLimiter = NewRateLimiter(requestsPerSecond)
+	client.rateLimiter.Start()
+	return client
+}
+
+// NewClientWithCircuitBreaker creates a new transport client with circuit breaker enabled.
+func NewClientWithCircuitBreaker(httpClient Doer, baseURL string, config CircuitBreakerConfig) *Client {
+	client := NewClient(httpClient, baseURL)
+	client.circuitBreaker = NewCircuitBreaker(config)
+	return client
+}
+
+// NewClientWithResilience creates a new transport client with both rate limiting and circuit breaker.
+func NewClientWithResilience(httpClient Doer, baseURL string, requestsPerSecond int, cbConfig CircuitBreakerConfig) *Client {
+	client := NewClient(httpClient, baseURL)
+	client.rateLimiter = NewRateLimiter(requestsPerSecond)
+	client.rateLimiter.Start()
+	client.circuitBreaker = NewCircuitBreaker(cbConfig)
+	return client
+}
+
+// SetRateLimiter sets the rate limiter for the client.
+func (c *Client) SetRateLimiter(rl *RateLimiter) {
+	c.rateLimiter = rl
+}
+
+// SetCircuitBreaker sets the circuit breaker for the client.
+func (c *Client) SetCircuitBreaker(cb *CircuitBreaker) {
+	c.circuitBreaker = cb
+}
+
 // CloneWithBaseURL creates a new client sharing the same underlying HTTP Doer
 // but targeting a different base URL (e.g., for specialized sub-services).
+// All settings including rate limiter, circuit breaker, and auth are preserved.
 func (c *Client) CloneWithBaseURL(baseURL string) *Client {
 	if c == nil {
 		return NewClient(nil, baseURL)
@@ -69,6 +108,11 @@ func (c *Client) CloneWithBaseURL(baseURL string) *Client {
 	clone := NewClient(c.httpClient, baseURL)
 	clone.userAgent = c.userAgent
 	clone.useServerTime = c.useServerTime
+	clone.signer = c.signer
+	clone.apiKey = c.apiKey
+	clone.builder = c.builder
+	clone.rateLimiter = c.rateLimiter
+	clone.circuitBreaker = c.circuitBreaker
 	return clone
 }
 
@@ -99,6 +143,71 @@ func (c *Client) SetUseServerTime(use bool) {
 // It handles payload serialization, authentication header injection, and retry logic.
 // Retryable errors include HTTP 429 (Rate Limit) and 5xx (Server Error).
 func (c *Client) Call(ctx context.Context, method, path string, query url.Values, body interface{}, dest interface{}, headers map[string]string) error {
+	// Apply circuit breaker if configured
+	if c.circuitBreaker != nil {
+		return c.circuitBreaker.CallWithFailurePredicate(func() error {
+			// Apply rate limiting only after breaker allows the request.
+			if c.rateLimiter != nil {
+				if err := c.rateLimiter.Wait(ctx); err != nil {
+					return fmt.Errorf("rate limiter: %w", err)
+				}
+			}
+			return c.doCall(ctx, method, path, query, body, dest, headers)
+		}, shouldCountCircuitBreakerFailure)
+	}
+
+	// Apply rate limiting if configured (no circuit breaker).
+	if c.rateLimiter != nil {
+		if err := c.rateLimiter.Wait(ctx); err != nil {
+			return fmt.Errorf("rate limiter: %w", err)
+		}
+	}
+
+	return c.doCall(ctx, method, path, query, body, dest, headers)
+}
+
+func shouldCountCircuitBreakerFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var apiErr *types.Error
+	if errors.As(err, &apiErr) {
+		if apiErr.Status >= 400 && apiErr.Status < 500 {
+			return false
+		}
+	}
+	var statusErr interface{ StatusCode() int }
+	if errors.As(err, &statusErr) {
+		status := statusErr.StatusCode()
+		if status >= 400 && status < 500 {
+			return false
+		}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	return true
+}
+
+type httpStatusError struct {
+	status int
+	body   string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("server error %d: %s", e.status, e.body)
+}
+
+func (e *httpStatusError) StatusCode() int {
+	return e.status
+}
+
+// doCall performs the actual HTTP request without rate limiting or circuit breaker.
+func (c *Client) doCall(ctx context.Context, method, path string, query url.Values, body interface{}, dest interface{}, headers map[string]string) error {
 	u := c.baseURL + "/" + strings.TrimLeft(path, "/")
 
 	// Append query parameters
@@ -209,7 +318,7 @@ func (c *Client) Call(ctx context.Context, method, path string, query url.Values
 		if resp.StatusCode >= 400 {
 			// Check if retryable (429 or 5xx)
 			if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-				lastErr = fmt.Errorf("server error %d: %s", resp.StatusCode, string(respBytes))
+				lastErr = &httpStatusError{status: resp.StatusCode, body: string(respBytes)}
 				continue
 			}
 

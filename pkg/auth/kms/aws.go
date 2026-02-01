@@ -7,6 +7,7 @@ import (
 	"encoding/asn1"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
@@ -15,6 +16,9 @@ import (
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 )
 
+// Default timeout for KMS operations
+const defaultKMSTimeout = 10 * time.Second
+
 // AWSSigner implements auth.Signer using AWS KMS.
 type AWSSigner struct {
 	client  *kms.Client
@@ -22,11 +26,17 @@ type AWSSigner struct {
 	chainID *big.Int
 	pubKey  *ecdsa.PublicKey
 	address common.Address
+	timeout time.Duration // Timeout for KMS operations
 }
 
 // NewAWSSigner creates a new signer backed by an AWS KMS key.
 // It fetches the public key from KMS to compute the address.
 func NewAWSSigner(ctx context.Context, client *kms.Client, keyID string, chainID int64) (*AWSSigner, error) {
+	return NewAWSSignerWithTimeout(ctx, client, keyID, chainID, defaultKMSTimeout)
+}
+
+// NewAWSSignerWithTimeout creates a new signer with a custom timeout for KMS operations.
+func NewAWSSignerWithTimeout(ctx context.Context, client *kms.Client, keyID string, chainID int64, timeout time.Duration) (*AWSSigner, error) {
 	pubKeyResp, err := client.GetPublicKey(ctx, &kms.GetPublicKeyInput{
 		KeyId: &keyID,
 	})
@@ -53,6 +63,7 @@ func NewAWSSigner(ctx context.Context, client *kms.Client, keyID string, chainID
 		chainID: big.NewInt(chainID),
 		pubKey:  ecdsaKey,
 		address: address,
+		timeout: timeout,
 	}, nil
 }
 
@@ -78,7 +89,7 @@ func (s *AWSSigner) SignTypedData(domain *apitypes.TypedDataDomain, typesDef api
 		return nil, fmt.Errorf("failed to hash typed data: %w", err)
 	}
 
-	// Sign with KMS
+	// Sign with KMS using a timeout context
 	signInput := &kms.SignInput{
 		KeyId:            &s.keyID,
 		Message:          sighash,
@@ -86,7 +97,11 @@ func (s *AWSSigner) SignTypedData(domain *apitypes.TypedDataDomain, typesDef api
 		SigningAlgorithm: types.SigningAlgorithmSpecEcdsaSha256,
 	}
 
-	signOutput, err := s.client.Sign(context.TODO(), signInput)
+	// Create a context with timeout to prevent hanging
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+
+	signOutput, err := s.client.Sign(ctx, signInput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign with KMS: %w", err)
 	}

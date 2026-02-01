@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -14,16 +13,16 @@ import (
 	"time"
 
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/logger"
 
 	"github.com/gorilla/websocket"
 	"github.com/shopspring/decimal"
 )
 
 const (
-	ProdBaseURL = "wss://ws-subscriptions-clob.polymarket.com"
+	ProdBaseURL        = "wss://ws-subscriptions-clob.polymarket.com"
+	DefaultReadTimeout = 60 * time.Second
 )
-
-var ReadTimeout = 60 * time.Second
 
 type clientImpl struct {
 	baseURL      string
@@ -50,6 +49,7 @@ type clientImpl struct {
 	reconnectMultiplier float64
 	heartbeatInterval   time.Duration
 	heartbeatTimeout    time.Duration
+	readTimeout         atomic.Int64 // stored as nanoseconds
 
 	lastPongMarket atomic.Int64
 	lastPongUser   atomic.Int64
@@ -183,6 +183,9 @@ func NewClient(url string, signer auth.Signer, apiKey *auth.APIKey) (Client, err
 		orderCh:             make(chan OrderEvent, 100),
 	}
 
+	// Initialize atomic readTimeout
+	c.readTimeout.Store(int64(DefaultReadTimeout))
+
 	if err := c.ensureMarketConn(); err != nil {
 		return nil, err
 	}
@@ -242,7 +245,7 @@ func (c *clientImpl) pingLoop(channel Channel) {
 				last := c.lastPong(channel)
 				if !last.IsZero() && time.Since(last) > timeout {
 					if c.debug {
-						log.Printf("heartbeat timeout on %s (last pong %s)", channel, last.Format(time.RFC3339))
+						logger.Warn("heartbeat timeout on %s (last pong %s)", channel, last.Format(time.RFC3339))
 					}
 					c.closeConn(channel)
 					return
@@ -311,7 +314,6 @@ func (c *clientImpl) ensureConn(channel Channel) error {
 func (c *clientImpl) connect(url string, setConn func(*websocket.Conn)) error {
 	headers := http.Header{}
 	headers.Set("User-Agent", "Go-Polymarket-SDK/1.0")
-	headers.Set("Origin", "https://polymarket.com") // Set Origin to bypass potential WAF/CORS checks
 
 	conn, _, err := websocket.DefaultDialer.Dial(url, headers)
 	if err != nil {
@@ -339,7 +341,8 @@ func (c *clientImpl) connectUser() error {
 func (c *clientImpl) readLoop(channel Channel) {
 	// Set initial read deadline
 	if conn := c.getConn(channel); conn != nil {
-		_ = conn.SetReadDeadline(time.Now().Add(ReadTimeout))
+		timeout := time.Duration(c.readTimeout.Load())
+		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	}
 
 	for {
@@ -358,13 +361,15 @@ func (c *clientImpl) readLoop(channel Channel) {
 			}
 			if c.reconnect {
 				if c.debug {
-					log.Printf("read error: %v (reconnecting)", err)
+					logger.Debug("read error: %v (reconnecting)", err)
 				}
 				if err := c.reconnectLoop(channel); err == nil {
-					continue
+					// Reconnection successful - a new readLoop has been started
+					// Exit this readLoop to avoid multiple goroutines reading from the same connection
+					return
 				}
 			}
-			log.Printf("read error: %v", err)
+			logger.Error("read error: %v", err)
 			c.setConnState(channel, ConnectionDisconnected, 0)
 			break
 		}
@@ -372,19 +377,20 @@ func (c *clientImpl) readLoop(channel Channel) {
 		c.setLastPong(channel, time.Now())
 
 		// Refresh read deadline
-		_ = conn.SetReadDeadline(time.Now().Add(ReadTimeout))
+		timeout := time.Duration(c.readTimeout.Load())
+		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 
 		// Check for PONG
 		if string(message) == "PONG" {
 			if c.debug {
-				log.Printf("Received PONG")
+				logger.Debug("Received PONG")
 			}
 			continue
 		}
 
 		// Debug: Print raw message to troubleshoot "no events"
 		if c.debug {
-			log.Printf("Raw WS Message: %s", string(message))
+			logger.Debug("Raw WS Message: %s", string(message))
 		}
 
 		// Parse generic message to determine type
@@ -992,6 +998,12 @@ func (c *clientImpl) Close() error {
 	return nil
 }
 
+// setReadTimeout sets the read timeout for WebSocket connections.
+// This is primarily used for testing purposes.
+func (c *clientImpl) setReadTimeout(timeout time.Duration) {
+	c.readTimeout.Store(int64(timeout))
+}
+
 func (c *clientImpl) writeJSON(channel Channel, v interface{}) error {
 	switch channel {
 	case ChannelUser:
@@ -1338,7 +1350,7 @@ func (c *clientImpl) reconnectLoop(channel Channel) error {
 			return lastErr
 		}
 		if c.debug {
-			log.Printf("ws reconnect attempt %d in %s (%s)", attempt+1, delay, channel)
+			logger.Debug("ws reconnect attempt %d in %s (%s)", attempt+1, delay, channel)
 		}
 		c.setConnState(channel, ConnectionReconnecting, attempt+1)
 		time.Sleep(delay)
@@ -1354,15 +1366,23 @@ func (c *clientImpl) reconnectLoop(channel Channel) error {
 		}
 		if err == nil {
 			if c.debug {
-				log.Printf("ws reconnect success")
+				logger.Debug("ws reconnect success")
 			}
 			c.setConnState(channel, ConnectionConnected, 0)
+			c.setLastPong(channel, time.Now())
+
+			// Restart read and ping loops after successful reconnection
+			go c.readLoop(channel)
+			if !c.disablePing {
+				go c.pingLoop(channel)
+			}
+
 			c.resubscribe(channel)
 			return nil
 		}
 		lastErr = err
 		if c.debug {
-			log.Printf("ws reconnect failed: %v", err)
+			logger.Debug("ws reconnect failed: %v", err)
 		}
 		nextDelay := time.Duration(float64(delay) * multiplier)
 		if nextDelay <= 0 {

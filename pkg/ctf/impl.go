@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"strings"
 
+	sdkerrors "github.com/GoPolymarket/polymarket-go-sdk/pkg/errors"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -18,13 +19,14 @@ const (
 	negRiskAdapterABI    = `[{"inputs":[{"internalType":"bytes32","name":"conditionId","type":"bytes32"},{"internalType":"uint256[]","name":"amounts","type":"uint256[]"}],"name":"redeemPositions","outputs":[],"stateMutability":"nonpayable","type":"function"}]`
 )
 
+// Use unified error definitions from pkg/errors
 var (
-	ErrMissingRequest    = errors.New("missing request")
-	ErrMissingU256Value  = errors.New("missing numeric value")
-	ErrMissingBackend    = errors.New("ctf backend is required")
-	ErrMissingTransactor = errors.New("ctf transactor is required")
-	ErrNegRiskAdapter    = errors.New("neg risk adapter is not configured")
-	ErrConfigNotFound    = errors.New("ctf contract config not found for chain ID")
+	ErrMissingRequest    = sdkerrors.ErrMissingRequest
+	ErrMissingU256Value  = sdkerrors.ErrMissingU256Value
+	ErrMissingBackend    = sdkerrors.ErrMissingBackend
+	ErrMissingTransactor = sdkerrors.ErrMissingTransactor
+	ErrNegRiskAdapter    = sdkerrors.ErrNegRiskAdapter
+	ErrConfigNotFound    = sdkerrors.ErrConfigNotFound
 )
 
 type clientImpl struct {

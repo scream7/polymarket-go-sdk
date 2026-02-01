@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -15,6 +14,8 @@ import (
 	"time"
 
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/auth"
+	sdkerrors "github.com/GoPolymarket/polymarket-go-sdk/pkg/errors"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/logger"
 	"github.com/gorilla/websocket"
 )
 
@@ -27,8 +28,9 @@ const (
 	connConnected
 )
 
+// Use unified error definitions from pkg/errors
 var (
-	ErrInvalidSubscription = errors.New("invalid subscription")
+	ErrInvalidSubscription = sdkerrors.ErrInvalidSubscription
 )
 
 const (
@@ -266,7 +268,7 @@ func (c *clientImpl) readLoop() error {
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
-			log.Printf("rtds read error: %v", err)
+			logger.Error("rtds read error: %v", err)
 			c.setState(ConnectionDisconnected)
 			return err
 		}
@@ -542,7 +544,7 @@ func (c *clientImpl) resubscribeAll() {
 		return
 	}
 	if err := c.sendSubscriptions(SubscribeAction, subs); err != nil {
-		log.Printf("rtds resubscribe failed: %v", err)
+		logger.Error("rtds resubscribe failed: %v", err)
 	}
 }
 

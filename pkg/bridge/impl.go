@@ -2,17 +2,17 @@ package bridge
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 	"sync"
 
+	sdkerrors "github.com/GoPolymarket/polymarket-go-sdk/pkg/errors"
+	"github.com/GoPolymarket/polymarket-go-sdk/pkg/transport"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/GoPolymarket/polymarket-go-sdk/pkg/transport"
 )
 
 const (
@@ -163,14 +163,15 @@ func (c *clientImpl) Status(ctx context.Context, req *StatusRequest) (StatusResp
 	return resp, err
 }
 
+// Use unified error definitions from pkg/errors
 var (
-	ErrMissingBackend         = errors.New("bridge backend is required")
-	ErrMissingTransactor      = errors.New("bridge transactor is required")
-	ErrMissingFromAddress     = errors.New("bridge transactor missing from address")
-	ErrMissingDepositAddress  = errors.New("evm deposit address is missing")
-	ErrWithdrawUnsupported    = errors.New("bridge withdraw is not supported via the API; use WithdrawTo for on-chain transfers")
-	ErrMissingWithdrawRequest = errors.New("withdraw request is required")
-	ErrMissingWithdrawAddress = errors.New("withdraw destination is required")
+	ErrMissingBackend         = sdkerrors.ErrMissingBackend
+	ErrMissingTransactor      = sdkerrors.ErrMissingTransactor
+	ErrMissingFromAddress     = sdkerrors.ErrMissingFromAddress
+	ErrMissingDepositAddress  = sdkerrors.ErrMissingDepositAddress
+	ErrWithdrawUnsupported    = sdkerrors.ErrWithdrawUnsupported
+	ErrMissingWithdrawRequest = sdkerrors.ErrMissingWithdrawRequest
+	ErrMissingWithdrawAddress = sdkerrors.ErrMissingWithdrawAddress
 )
 
 const erc20ABI = `[{

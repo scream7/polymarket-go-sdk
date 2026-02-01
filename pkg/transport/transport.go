@@ -35,13 +35,15 @@ type Doer interface {
 // It adds Polymarket-specific functionality like automatic HMAC signing
 // and transparent request retries for ephemeral server errors.
 type Client struct {
-	httpClient    Doer
-	baseURL       string
-	userAgent     string
-	signer        auth.Signer
-	apiKey        *auth.APIKey
-	builder       *auth.BuilderConfig
-	useServerTime bool
+	httpClient     Doer
+	baseURL        string
+	userAgent      string
+	signer         auth.Signer
+	apiKey         *auth.APIKey
+	builder        *auth.BuilderConfig
+	useServerTime  bool
+	rateLimiter    *RateLimiter
+	circuitBreaker *CircuitBreaker
 }
 
 // NewClient creates a new transport client.
@@ -58,6 +60,40 @@ func NewClient(httpClient Doer, baseURL string) *Client {
 		baseURL:    baseURL,
 		userAgent:  "github.com/GoPolymarket/polymarket-go-sdk/1.0",
 	}
+}
+
+// NewClientWithRateLimiter creates a new transport client with rate limiting enabled.
+func NewClientWithRateLimiter(httpClient Doer, baseURL string, requestsPerSecond int) *Client {
+	client := NewClient(httpClient, baseURL)
+	client.rateLimiter = NewRateLimiter(requestsPerSecond)
+	client.rateLimiter.Start()
+	return client
+}
+
+// NewClientWithCircuitBreaker creates a new transport client with circuit breaker enabled.
+func NewClientWithCircuitBreaker(httpClient Doer, baseURL string, config CircuitBreakerConfig) *Client {
+	client := NewClient(httpClient, baseURL)
+	client.circuitBreaker = NewCircuitBreaker(config)
+	return client
+}
+
+// NewClientWithResilience creates a new transport client with both rate limiting and circuit breaker.
+func NewClientWithResilience(httpClient Doer, baseURL string, requestsPerSecond int, cbConfig CircuitBreakerConfig) *Client {
+	client := NewClient(httpClient, baseURL)
+	client.rateLimiter = NewRateLimiter(requestsPerSecond)
+	client.rateLimiter.Start()
+	client.circuitBreaker = NewCircuitBreaker(cbConfig)
+	return client
+}
+
+// SetRateLimiter sets the rate limiter for the client.
+func (c *Client) SetRateLimiter(rl *RateLimiter) {
+	c.rateLimiter = rl
+}
+
+// SetCircuitBreaker sets the circuit breaker for the client.
+func (c *Client) SetCircuitBreaker(cb *CircuitBreaker) {
+	c.circuitBreaker = cb
 }
 
 // CloneWithBaseURL creates a new client sharing the same underlying HTTP Doer
@@ -99,6 +135,25 @@ func (c *Client) SetUseServerTime(use bool) {
 // It handles payload serialization, authentication header injection, and retry logic.
 // Retryable errors include HTTP 429 (Rate Limit) and 5xx (Server Error).
 func (c *Client) Call(ctx context.Context, method, path string, query url.Values, body interface{}, dest interface{}, headers map[string]string) error {
+	// Apply rate limiting if configured
+	if c.rateLimiter != nil {
+		if err := c.rateLimiter.Wait(ctx); err != nil {
+			return fmt.Errorf("rate limiter: %w", err)
+		}
+	}
+
+	// Apply circuit breaker if configured
+	if c.circuitBreaker != nil {
+		return c.circuitBreaker.Call(func() error {
+			return c.doCall(ctx, method, path, query, body, dest, headers)
+		})
+	}
+
+	return c.doCall(ctx, method, path, query, body, dest, headers)
+}
+
+// doCall performs the actual HTTP request without rate limiting or circuit breaker.
+func (c *Client) doCall(ctx context.Context, method, path string, query url.Values, body interface{}, dest interface{}, headers map[string]string) error {
 	u := c.baseURL + "/" + strings.TrimLeft(path, "/")
 
 	// Append query parameters

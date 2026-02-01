@@ -12,13 +12,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"strings"
 	"time"
 
+	sdkerrors "github.com/GoPolymarket/polymarket-go-sdk/pkg/errors"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -116,11 +116,12 @@ var walletConfigs = map[int64]walletConfig{
 }
 
 var (
-	ErrMissingSigner          = errors.New("signer is required")
-	ErrMissingCreds           = errors.New("api credentials are required")
-	ErrMissingBuilderConfig   = errors.New("builder config is required")
-	ErrProxyWalletUnsupported = errors.New("proxy wallet derivation not supported on this chain")
-	ErrSafeWalletUnsupported  = errors.New("safe wallet derivation not supported on this chain")
+	// Use unified error definitions from pkg/errors
+	ErrMissingSigner          = sdkerrors.ErrMissingSigner
+	ErrMissingCreds           = sdkerrors.ErrMissingCreds
+	ErrMissingBuilderConfig   = sdkerrors.ErrMissingBuilderConfig
+	ErrProxyWalletUnsupported = sdkerrors.ErrProxyWalletUnsupported
+	ErrSafeWalletUnsupported  = sdkerrors.ErrSafeWalletUnsupported
 )
 
 // Authentication header keys used by Polymarket API.

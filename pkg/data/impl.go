@@ -2,12 +2,12 @@ package data
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
 
+	sdkerrors "github.com/GoPolymarket/polymarket-go-sdk/pkg/errors"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/transport"
 	"github.com/GoPolymarket/polymarket-go-sdk/pkg/types"
 
@@ -18,11 +18,12 @@ const (
 	BaseURL = "https://data-api.polymarket.com"
 )
 
+// Use unified error definitions from pkg/errors
 var (
-	ErrMissingRequest      = errors.New("request is required")
-	ErrMissingUser         = errors.New("user is required")
-	ErrInvalidMarketFilter = errors.New("market filter cannot include both markets and event IDs")
-	ErrInvalidTradeFilter  = errors.New("trade filter requires both filter type and amount")
+	ErrMissingRequest      = sdkerrors.ErrMissingRequest
+	ErrMissingUser         = sdkerrors.ErrMissingUser
+	ErrInvalidMarketFilter = sdkerrors.ErrInvalidMarketFilter
+	ErrInvalidTradeFilter  = sdkerrors.ErrInvalidTradeFilter
 )
 
 type clientImpl struct {

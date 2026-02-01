@@ -80,15 +80,15 @@ func TestCircuitBreaker_ClosedState(t *testing.T) {
 		})
 
 		// Fail twice
-		cb.Call(func() error { return errors.New("error") })
-		cb.Call(func() error { return errors.New("error") })
+		_ = cb.Call(func() error { return errors.New("error") })
+		_ = cb.Call(func() error { return errors.New("error") })
 
 		if cb.Failures() != 2 {
 			t.Errorf("Failures() = %d, want 2", cb.Failures())
 		}
 
 		// Succeed once
-		cb.Call(func() error { return nil })
+		_ = cb.Call(func() error { return nil })
 
 		if cb.Failures() != 0 {
 			t.Errorf("Failures() = %d, want 0 (should reset on success)", cb.Failures())

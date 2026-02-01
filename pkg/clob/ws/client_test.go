@@ -78,11 +78,6 @@ func TestClientConnection(t *testing.T) {
 }
 
 func TestClientReadTimeout(t *testing.T) {
-	// Save original timeout and restore after test
-	originalTimeout := ReadTimeout
-	ReadTimeout = 100 * time.Millisecond
-	defer func() { ReadTimeout = originalTimeout }()
-
 	connections := make(chan struct{}, 10)
 
 	s := mockWSServer(t, func(c *websocket.Conn) {
@@ -97,12 +92,17 @@ func TestClientReadTimeout(t *testing.T) {
 	// Set reconnect max to allow multiple reconnects
 	// We can't easily set reconnect options via NewClient without env vars,
 	// but defaults are usually fine (reconnect=true).
-	
+
 	client, err := NewClient(wsURL, nil, nil)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 	defer client.Close()
+
+	// Set a short read timeout for testing
+	if impl, ok := client.(*clientImpl); ok {
+		impl.setReadTimeout(100 * time.Millisecond)
+	}
 
 	// 1. First connection
 	select {

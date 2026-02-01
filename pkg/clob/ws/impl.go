@@ -20,10 +20,9 @@ import (
 )
 
 const (
-	ProdBaseURL = "wss://ws-subscriptions-clob.polymarket.com"
+	ProdBaseURL        = "wss://ws-subscriptions-clob.polymarket.com"
+	DefaultReadTimeout = 60 * time.Second
 )
-
-var ReadTimeout = 60 * time.Second
 
 type clientImpl struct {
 	baseURL      string
@@ -50,6 +49,7 @@ type clientImpl struct {
 	reconnectMultiplier float64
 	heartbeatInterval   time.Duration
 	heartbeatTimeout    time.Duration
+	readTimeout         atomic.Int64 // stored as nanoseconds
 
 	lastPongMarket atomic.Int64
 	lastPongUser   atomic.Int64
@@ -182,6 +182,9 @@ func NewClient(url string, signer auth.Signer, apiKey *auth.APIKey) (Client, err
 		tradeCh:             make(chan TradeEvent, 100),
 		orderCh:             make(chan OrderEvent, 100),
 	}
+
+	// Initialize atomic readTimeout
+	c.readTimeout.Store(int64(DefaultReadTimeout))
 
 	if err := c.ensureMarketConn(); err != nil {
 		return nil, err
@@ -338,7 +341,8 @@ func (c *clientImpl) connectUser() error {
 func (c *clientImpl) readLoop(channel Channel) {
 	// Set initial read deadline
 	if conn := c.getConn(channel); conn != nil {
-		_ = conn.SetReadDeadline(time.Now().Add(ReadTimeout))
+		timeout := time.Duration(c.readTimeout.Load())
+		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	}
 
 	for {
@@ -360,7 +364,9 @@ func (c *clientImpl) readLoop(channel Channel) {
 					logger.Debug("read error: %v (reconnecting)", err)
 				}
 				if err := c.reconnectLoop(channel); err == nil {
-					continue
+					// Reconnection successful - a new readLoop has been started
+					// Exit this readLoop to avoid multiple goroutines reading from the same connection
+					return
 				}
 			}
 			logger.Error("read error: %v", err)
@@ -371,7 +377,8 @@ func (c *clientImpl) readLoop(channel Channel) {
 		c.setLastPong(channel, time.Now())
 
 		// Refresh read deadline
-		_ = conn.SetReadDeadline(time.Now().Add(ReadTimeout))
+		timeout := time.Duration(c.readTimeout.Load())
+		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 
 		// Check for PONG
 		if string(message) == "PONG" {
@@ -989,6 +996,12 @@ func (c *clientImpl) Close() error {
 	c.closeAllStreams()
 	c.shutdown()
 	return nil
+}
+
+// setReadTimeout sets the read timeout for WebSocket connections.
+// This is primarily used for testing purposes.
+func (c *clientImpl) setReadTimeout(timeout time.Duration) {
+	c.readTimeout.Store(int64(timeout))
 }
 
 func (c *clientImpl) writeJSON(channel Channel, v interface{}) error {

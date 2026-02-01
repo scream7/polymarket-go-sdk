@@ -98,6 +98,7 @@ func (c *Client) SetCircuitBreaker(cb *CircuitBreaker) {
 
 // CloneWithBaseURL creates a new client sharing the same underlying HTTP Doer
 // but targeting a different base URL (e.g., for specialized sub-services).
+// All settings including rate limiter, circuit breaker, and auth are preserved.
 func (c *Client) CloneWithBaseURL(baseURL string) *Client {
 	if c == nil {
 		return NewClient(nil, baseURL)
@@ -105,6 +106,11 @@ func (c *Client) CloneWithBaseURL(baseURL string) *Client {
 	clone := NewClient(c.httpClient, baseURL)
 	clone.userAgent = c.userAgent
 	clone.useServerTime = c.useServerTime
+	clone.signer = c.signer
+	clone.apiKey = c.apiKey
+	clone.builder = c.builder
+	clone.rateLimiter = c.rateLimiter
+	clone.circuitBreaker = c.circuitBreaker
 	return clone
 }
 

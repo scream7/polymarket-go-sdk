@@ -141,6 +141,43 @@ func TestClientHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("Clone preserves resilience settings", func(t *testing.T) {
+		// Create client with rate limiter and circuit breaker
+		client := NewClientWithResilience(http.DefaultClient, "http://example.com", 10, DefaultCircuitBreakerConfig())
+		client.SetUserAgent("test-agent")
+		client.SetUseServerTime(true)
+
+		// Clone with new base URL
+		clone := client.CloneWithBaseURL("http://new.com")
+
+		// Verify base URL changed
+		if clone.baseURL != "http://new.com" {
+			t.Errorf("expected baseURL http://new.com, got %s", clone.baseURL)
+		}
+
+		// Verify resilience settings preserved
+		if clone.rateLimiter == nil {
+			t.Error("rate limiter not preserved in clone")
+		}
+		if clone.circuitBreaker == nil {
+			t.Error("circuit breaker not preserved in clone")
+		}
+		if clone.rateLimiter != client.rateLimiter {
+			t.Error("rate limiter should be shared between original and clone")
+		}
+		if clone.circuitBreaker != client.circuitBreaker {
+			t.Error("circuit breaker should be shared between original and clone")
+		}
+
+		// Verify other settings preserved
+		if clone.userAgent != client.userAgent {
+			t.Errorf("userAgent not preserved: expected %s, got %s", client.userAgent, clone.userAgent)
+		}
+		if clone.useServerTime != client.useServerTime {
+			t.Error("useServerTime not preserved")
+		}
+	})
+
 	t.Run("Setters", func(t *testing.T) {
 		client := NewClient(http.DefaultClient, "http://example.com")
 		client.SetUserAgent("ua")

@@ -100,14 +100,14 @@ func (cb *CircuitBreaker) beforeRequest() error {
 
 	case StateOpen:
 		// Check if we should transition to half-open
-		if time.Since(cb.lastFailTime) > cb.resetTimeout {
-			cb.state = StateHalfOpen
-			cb.halfOpenReqs = 0
-			cb.halfOpenSuccess = 0
-			cb.halfOpenFailure = 0
-			return nil
+		if time.Since(cb.lastFailTime) <= cb.resetTimeout {
+			return ErrCircuitOpen
 		}
-		return ErrCircuitOpen
+		cb.state = StateHalfOpen
+		cb.halfOpenReqs = 0
+		cb.halfOpenSuccess = 0
+		cb.halfOpenFailure = 0
+		fallthrough
 
 	case StateHalfOpen:
 		if cb.halfOpenReqs >= cb.halfOpenMaxReqs {

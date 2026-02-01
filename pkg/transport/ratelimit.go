@@ -15,6 +15,7 @@ type RateLimiter struct {
 	refillStopped  chan struct{}
 	mu             sync.Mutex
 	started        bool
+	stopOnce       sync.Once
 }
 
 // NewRateLimiter creates a new rate limiter with the specified requests per second.
@@ -82,7 +83,9 @@ func (rl *RateLimiter) Stop() {
 	}
 	rl.mu.Unlock()
 
-	close(rl.stopRefill)
+	rl.stopOnce.Do(func() {
+		close(rl.stopRefill)
+	})
 	<-rl.refillStopped
 }
 

@@ -227,6 +227,24 @@ func TestRateLimiter_StartStop(t *testing.T) {
 		// Should not panic
 		rl.Stop()
 	})
+
+	t.Run("stop twice", func(t *testing.T) {
+		rl := NewRateLimiter(10)
+		rl.Start()
+		rl.Stop()
+
+		done := make(chan struct{})
+		go func() {
+			rl.Stop()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(1 * time.Second):
+			t.Fatal("second Stop blocked")
+		}
+	})
 }
 
 func TestRateLimiter_RateEnforcement(t *testing.T) {

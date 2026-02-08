@@ -71,6 +71,10 @@ func NewClientWithGeoblock(httpClient *transport.Client, geoblockHost string) Cl
 		geoblockHost = DefaultGeoblockHost
 	}
 
+	if httpClient == nil {
+		httpClient = transport.NewClient(nil, BaseURL)
+	}
+
 	c := &clientImpl{
 		httpClient:     httpClient,
 		cache:          newClientCache(),

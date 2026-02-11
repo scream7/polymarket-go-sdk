@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,14 +63,14 @@ func TestWebSocketGoroutineLeaks_Reconnection(t *testing.T) {
 func TestWebSocketGoroutineLeaks_MultipleReconnections(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
-	connectionCount := 0
+	var connectionCount int32
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
-		connectionCount++
+		atomic.AddInt32(&connectionCount, 1)
 		// Close after a short delay
 		time.AfterFunc(20*time.Millisecond, func() {
 			conn.Close()
@@ -99,8 +100,9 @@ func TestWebSocketGoroutineLeaks_MultipleReconnections(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	if connectionCount < 2 {
-		t.Logf("Warning: only %d connections made, expected multiple reconnections", connectionCount)
+	count := atomic.LoadInt32(&connectionCount)
+	if count < 2 {
+		t.Logf("Warning: only %d connections made, expected multiple reconnections", count)
 	}
 }
 
@@ -109,18 +111,23 @@ func TestWebSocketGoroutineLeaks_MultipleReconnections(t *testing.T) {
 func TestWebSocketGoroutineLeaks_CloseWhileReading(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
+	done := make(chan struct{})
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
+		defer conn.Close()
 		// Keep connection open but don't send data
 		// This simulates a hanging read
-		time.Sleep(5 * time.Second)
-		conn.Close()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
 	}))
 	defer server.Close()
+	defer close(done)
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 
@@ -173,10 +180,6 @@ func TestWebSocketGoroutineLeaks_PingLoopCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
-
-	impl := client.(*clientImpl)
-	impl.heartbeatInterval = 20 * time.Millisecond
-	impl.disablePing = false
 
 	// Wait for ping loop to start and send some pings
 	time.Sleep(100 * time.Millisecond)

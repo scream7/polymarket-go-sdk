@@ -38,39 +38,43 @@ func (rl *RateLimiter) Start() {
 
 // Wait blocks until a token is available or the context is cancelled.
 func (rl *RateLimiter) Wait(ctx context.Context) error {
-	rl.mu.Lock()
-
-	// Refill tokens based on elapsed time
-	rl.refillTokens()
-
-	// If we have tokens available, consume one and return immediately
-	if rl.tokens >= 1.0 {
-		rl.tokens -= 1.0
-		rl.mu.Unlock()
-		return nil
-	}
-
-	// Calculate how long to wait for the next token
-	tokensNeeded := 1.0 - rl.tokens
-	waitDuration := time.Duration(float64(time.Second) * tokensNeeded / rl.tokensPerSec)
-
-	// Unlock while waiting to allow other goroutines to proceed
-	rl.mu.Unlock()
-
-	// Wait for either the required duration or context cancellation
-	timer := time.NewTimer(waitDuration)
-	defer timer.Stop()
-
-	select {
-	case <-timer.C:
-		// Re-acquire lock and consume token
+	for {
 		rl.mu.Lock()
+
+		// Check if stopped
+		if rl.stopped {
+			rl.mu.Unlock()
+			return context.Canceled
+		}
+
+		// Refill tokens based on elapsed time
 		rl.refillTokens()
-		rl.tokens -= 1.0
+
+		// If we have tokens available, consume one and return immediately
+		if rl.tokens >= 1.0 {
+			rl.tokens -= 1.0
+			rl.mu.Unlock()
+			return nil
+		}
+
+		// Calculate how long to wait for the next token
+		tokensNeeded := 1.0 - rl.tokens
+		waitDuration := time.Duration(float64(time.Second) * tokensNeeded / rl.tokensPerSec)
+
+		// Unlock while waiting to allow other goroutines to proceed
 		rl.mu.Unlock()
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+
+		// Wait for either the required duration or context cancellation
+		timer := time.NewTimer(waitDuration)
+		select {
+		case <-timer.C:
+			timer.Stop()
+			// Loop back to re-check token availability under lock
+			continue
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
 	}
 }
 

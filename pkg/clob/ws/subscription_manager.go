@@ -69,6 +69,9 @@ func (s *subscriptionEntry[T]) notifyLag(count int) {
 	if count <= 0 {
 		return
 	}
+	if s.closed.Load() {
+		return
+	}
 	select {
 	case s.errCh <- LaggedError{Count: count, Channel: s.channel, EventType: s.event}:
 	default:

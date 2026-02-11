@@ -1399,6 +1399,19 @@ func (c *clientImpl) reconnectLoop(channel Channel) error {
 		c.setConnState(channel, ConnectionReconnecting, attempt+1)
 		time.Sleep(delay)
 
+		// Use init mutex to serialize with ensure* methods
+		var initMu *sync.Mutex
+		switch channel {
+		case ChannelMarket:
+			initMu = &c.marketInitMu
+		case ChannelUser:
+			initMu = &c.userInitMu
+		}
+
+		if initMu != nil {
+			initMu.Lock()
+		}
+
 		// Cancel old goroutines and close old connection
 		c.cancelGoroutines(channel)
 		c.closeConn(channel)
@@ -1428,8 +1441,16 @@ func (c *clientImpl) reconnectLoop(channel Channel) error {
 				go c.pingLoop(channel)
 			}
 
+			if initMu != nil {
+				initMu.Unlock()
+			}
+
 			c.resubscribe(channel)
 			return nil
+		}
+
+		if initMu != nil {
+			initMu.Unlock()
 		}
 		lastErr = err
 		if c.debug {
@@ -1555,21 +1576,24 @@ func (c *clientImpl) closeConn(channel Channel) {
 	// Cancel goroutines before closing connection
 	c.cancelGoroutines(channel)
 
-	conn := c.getConn(channel)
-	if conn != nil {
-		_ = conn.Close()
-	}
-
-	// Set connection to nil after closing to prevent race conditions
+	// Atomically get and clear connection to prevent race with concurrent reconnect
 	switch channel {
 	case ChannelUser:
 		c.userMu.Lock()
+		conn := c.userConn
 		c.userConn = nil
 		c.userMu.Unlock()
+		if conn != nil {
+			_ = conn.Close()
+		}
 	default:
 		c.mu.Lock()
+		conn := c.conn
 		c.conn = nil
 		c.mu.Unlock()
+		if conn != nil {
+			_ = conn.Close()
+		}
 	}
 }
 

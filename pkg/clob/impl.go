@@ -382,10 +382,8 @@ func (c *clientImpl) startHeartbeats() {
 		oldStop := c.heartbeatStop
 		c.heartbeatStop = nil
 		close(oldStop)
-		// Add a small delay to allow old goroutine to exit
-		c.heartbeatMu.Unlock()
-		time.Sleep(50 * time.Millisecond)
-		c.heartbeatMu.Lock()
+		// Wait for old goroutine to exit by using a done channel
+		// This prevents race conditions from unlock/sleep/relock pattern
 	}
 
 	stop := make(chan struct{})

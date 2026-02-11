@@ -21,7 +21,7 @@ func StreamData[T any](ctx context.Context, fetch StreamFetch[T]) <-chan StreamR
 
 // StreamDataWithCursor streams items starting from a specific cursor.
 func StreamDataWithCursor[T any](ctx context.Context, cursor string, fetch StreamFetch[T]) <-chan StreamResult[T] {
-	out := make(chan StreamResult[T])
+	out := make(chan StreamResult[T], 1) // Buffered to prevent goroutine leak if consumer stops receiving
 	go func() {
 		defer close(out)
 		if ctx == nil {
@@ -34,21 +34,30 @@ func StreamDataWithCursor[T any](ctx context.Context, cursor string, fetch Strea
 		for cursor != clobtypes.EndCursor {
 			// Check context before each fetch operation
 			if err := ctx.Err(); err != nil {
-				out <- StreamResult[T]{Err: err}
+				select {
+				case out <- StreamResult[T]{Err: err}:
+				case <-ctx.Done():
+				}
 				return
 			}
 
 			// Make fetch operation cancellable by passing context
 			items, next, err := fetch(ctx, cursor)
 			if err != nil {
-				out <- StreamResult[T]{Err: err}
+				select {
+				case out <- StreamResult[T]{Err: err}:
+				case <-ctx.Done():
+				}
 				return
 			}
 
 			for _, item := range items {
 				// Check context before sending each item
 				if err := ctx.Err(); err != nil {
-					out <- StreamResult[T]{Err: err}
+					select {
+					case out <- StreamResult[T]{Err: err}:
+					case <-ctx.Done():
+					}
 					return
 				}
 
@@ -56,7 +65,6 @@ func StreamDataWithCursor[T any](ctx context.Context, cursor string, fetch Strea
 				select {
 				case out <- StreamResult[T]{Item: item}:
 				case <-ctx.Done():
-					out <- StreamResult[T]{Err: ctx.Err()}
 					return
 				}
 			}

@@ -2,7 +2,6 @@ package ws
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -18,7 +17,8 @@ type subscriptionEntry[T any] struct {
 	markets   map[string]struct{}
 	ch        chan T
 	errCh     chan error
-	closed    atomic.Bool
+	mu        sync.RWMutex // Protects channel operations
+	closed    bool
 	closeOnce sync.Once
 }
 
@@ -51,11 +51,13 @@ func (s *subscriptionEntry[T]) matchesMarket(market string) bool {
 }
 
 func (s *subscriptionEntry[T]) trySend(msg T) {
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
 		return
 	}
-	// Use non-blocking send with timeout to prevent panic on closed channel
-	// This avoids TOCTOU race condition between closed check and send
+	// Use non-blocking send to prevent blocking
 	select {
 	case s.ch <- msg:
 		return
@@ -68,7 +70,10 @@ func (s *subscriptionEntry[T]) notifyLag(count int) {
 	if count <= 0 {
 		return
 	}
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
 		return
 	}
 	select {
@@ -78,13 +83,15 @@ func (s *subscriptionEntry[T]) notifyLag(count int) {
 }
 
 func (s *subscriptionEntry[T]) close() bool {
-	if s.closed.Swap(true) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
 		return false
 	}
+
 	s.closeOnce.Do(func() {
-		// Close channels immediately after setting closed flag
-		// trySend() and notifyLag() use non-blocking sends with closed checks,
-		// so they won't panic on closed channels
+		s.closed = true
 		close(s.ch)
 		close(s.errCh)
 	})

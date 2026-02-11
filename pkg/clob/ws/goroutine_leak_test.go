@@ -168,7 +168,7 @@ func TestWebSocketGoroutineLeaks_PingLoopCleanup(t *testing.T) {
 				return
 			}
 			if string(msg) == "PING" {
-				conn.WriteMessage(websocket.TextMessage, []byte("PONG"))
+				_ = conn.WriteMessage(websocket.TextMessage, []byte("PONG"))
 			}
 		}
 	}))

@@ -63,7 +63,7 @@ func TestRaceCondition_ConcurrentCloseAndRead(t *testing.T) {
 		defer ticker.Stop()
 		for i := 0; i < 20; i++ {
 			<-ticker.C
-			conn.WriteMessage(websocket.TextMessage, []byte(`{"event_type":"price","asset_id":"test","price":"0.5"}`))
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"event_type":"price","asset_id":"test","price":"0.5"}`))
 		}
 	}))
 	defer server.Close()
@@ -163,7 +163,7 @@ func TestRaceCondition_ConcurrentSubscriptionAccess(t *testing.T) {
 		defer ticker.Stop()
 		for i := 0; i < 50; i++ {
 			<-ticker.C
-			conn.WriteMessage(websocket.TextMessage, []byte(`{"event_type":"price","asset_id":"test","price":"0.5"}`))
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"event_type":"price","asset_id":"test","price":"0.5"}`))
 		}
 	}))
 	defer server.Close()

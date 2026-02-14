@@ -542,17 +542,7 @@ func (b *OrderBuilder) resolveTickSize(ctx context.Context, tokenID string) (dec
 			}
 			return decimal.Decimal{}, fmt.Errorf("tick size lookup failed: %w", err)
 		}
-		tickStr := resp.MinimumTickSize
-		if tickStr == 0 {
-			tickStr = resp.TickSize
-		}
-		if tickStr == 0 {
-			if override != nil {
-				return *override, nil
-			}
-			return decimal.Decimal{}, fmt.Errorf("tick size is missing from response")
-		}
-		minTick := decimal.NewFromInt(int64(tickStr))
+		minTick := decimal.NewFromFloat(resp.MinimumTickSize)
 
 		if override != nil {
 			if override.Cmp(minTick) < 0 {

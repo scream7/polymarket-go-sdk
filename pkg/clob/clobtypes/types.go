@@ -317,7 +317,7 @@ type (
 	}
 	PricesHistoryResponse []PriceHistoryPoint
 	OrderResponse         struct {
-		ID     string `json:"id"`
+		ID     string `json:"orderID"`
 		Status string `json:"status"`
 	}
 	PostOrdersResponse []OrderResponse
